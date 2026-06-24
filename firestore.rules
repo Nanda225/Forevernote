@@ -1,0 +1,224 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global default deny safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- Helper Functions ---
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isEmailVerified() {
+      return isSignedIn();
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isPartnerOf(partnerId) {
+      return isSignedIn() && 
+             exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+             get(/databases/$(database)/documents/users/$(request.auth.uid)).data.connectedPartnerId == partnerId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // --- Entity Validations (No existing() or diff() inside helpers) ---
+    function isValidUser(data) {
+      return data.keys().hasAll(['name', 'email', 'createdAt'])
+        && data.keys().size() <= 15
+        && data.name is string && data.name.size() <= 100
+        && data.email is string && data.email.size() <= 100
+        && (!data.keys().hasAny(['partnerName']) || (data.partnerName is string && data.partnerName.size() <= 100))
+        && (!data.keys().hasAny(['partnerEmail']) || (data.partnerEmail is string && data.partnerEmail.size() <= 100))
+        && (!data.keys().hasAny(['anniversaryDate']) || (data.anniversaryDate is string && data.anniversaryDate.size() <= 15))
+        && (!data.keys().hasAny(['inviteCode']) || (data.inviteCode is string && data.inviteCode.size() <= 50))
+        && (!data.keys().hasAny(['partnerInviteCode']) || (data.partnerInviteCode is string && data.partnerInviteCode.size() <= 50))
+        && (!data.keys().hasAny(['connectedPartnerId']) || (data.connectedPartnerId is string && data.connectedPartnerId.size() <= 128))
+        && (!data.keys().hasAny(['activeCountdownId']) || (data.activeCountdownId is string && data.activeCountdownId.size() <= 100))
+        && data.createdAt is timestamp;
+    }
+
+    function isValidLoveMessage(data) {
+      return data.keys().hasAll(['senderId', 'recipientId', 'text', 'style', 'createdAt'])
+        && data.keys().size() <= 5
+        && data.senderId is string && data.senderId.size() <= 128
+        && data.recipientId is string && data.recipientId.size() <= 128
+        && data.text is string && data.text.size() <= 5000
+        && data.style is string && data.style.size() <= 100
+        && data.createdAt is timestamp;
+    }
+
+    function isValidMilestone(data) {
+      return data.keys().hasAll(['userId', 'title', 'type', 'date', 'description', 'createdAt'])
+        && data.keys().size() <= 9
+        && data.userId is string && data.userId.size() <= 128
+        && data.title is string && data.title.size() <= 200
+        && data.type is string && data.type.size() <= 50
+        && data.date is string && data.date.size() <= 10
+        && data.description is string && data.description.size() <= 3000
+        && (!data.keys().hasAny(['aiLetterStyle']) || (data.aiLetterStyle is string && data.aiLetterStyle.size() <= 50))
+        && (!data.keys().hasAny(['generatedLetter']) || (data.generatedLetter is string && data.generatedLetter.size() <= 20000))
+        && (!data.keys().hasAny(['imageUrl']) || (data.imageUrl is string && data.imageUrl.size() <= 1500000))
+        && (data.createdAt is timestamp || (data.createdAt is string && data.createdAt.size() <= 50));
+    }
+
+    function isValidReminder(data) {
+      return data.keys().hasAll(['milestoneId', 'userId', 'deliveryType', 'scheduledDate', 'status', 'createdAt'])
+        && data.keys().size() <= 7
+        && data.milestoneId is string && data.milestoneId.size() <= 128
+        && data.userId is string && data.userId.size() <= 128
+        && data.deliveryType is string && data.deliveryType.size() <= 20
+        && data.scheduledDate is string && data.scheduledDate.size() <= 10
+        && data.status is string && data.status.size() <= 20
+        && data.createdAt is timestamp;
+    }
+
+    function isValidGalleryItem(data) {
+      return data.keys().hasAll(['userId', 'title', 'caption', 'imageUrl', 'category', 'date'])
+        && data.keys().size() <= 9
+        && data.userId is string && data.userId.size() <= 128
+        && (!data.keys().hasAny(['partnerId']) || (data.partnerId is string && data.partnerId.size() <= 128))
+        && data.title is string && data.title.size() <= 200
+        && data.caption is string && data.caption.size() <= 3000
+        && data.imageUrl is string && data.imageUrl.size() <= 3800000
+        && data.category is string && data.category.size() <= 50
+        && data.date is string && data.date.size() <= 15
+        && (!data.keys().hasAny(['reactions']) || data.reactions is map)
+        && (!data.keys().hasAny(['createdAt']) || (data.createdAt is timestamp || data.createdAt == null));
+    }
+
+    // --- Collections ---
+
+    // Users Collection
+    match /users/{userId} {
+      allow get, list: if isSignedIn();
+      // For creation, createdAt must be current server timestamp
+      allow create: if isEmailVerified() && isOwner(userId) && isValidUser(incoming())
+                       && incoming().createdAt == request.time;
+      // For updates, email and createdAt must not change (allow owners and linked partners to update)
+      allow update: if isEmailVerified() && (
+                       isOwner(userId) || 
+                       (
+                         // Allow connected partner to update activeCountdownId on other user
+                         existing().connectedPartnerId == request.auth.uid &&
+                         incoming().diff(existing()).affectedKeys().hasOnly(['activeCountdownId'])
+                       ) ||
+                       (
+                         // Non-owner linking or unlinking
+                         (
+                           (existing().connectedPartnerId == "" && incoming().connectedPartnerId == request.auth.uid) ||
+                           (existing().connectedPartnerId == request.auth.uid && incoming().connectedPartnerId == "")
+                         ) &&
+                         incoming().name == existing().name &&
+                         incoming().email == existing().email &&
+                         incoming().inviteCode == existing().inviteCode &&
+                         incoming().createdAt == existing().createdAt
+                       )
+                    ) && isValidUser(incoming())
+                       && incoming().createdAt == existing().createdAt
+                       && incoming().email == existing().email;
+    }
+
+    // Love Messages Collection
+    match /love_messages/{messageId} {
+      allow read: if isSignedIn() && (resource.data.senderId == request.auth.uid || resource.data.recipientId == request.auth.uid);
+      allow create: if isEmailVerified() && isValidId(messageId) && incoming().senderId == request.auth.uid
+                       && isValidLoveMessage(incoming())
+                       && incoming().createdAt == request.time;
+      allow delete: if isEmailVerified() && isValidId(messageId) && existing().senderId == request.auth.uid;
+    }
+
+    // Milestones Collection
+    match /milestones/{milestoneId} {
+      allow read: if isSignedIn() && (
+        resource.data.userId == request.auth.uid || 
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+         resource.data.userId == get(/databases/$(database)/documents/users/$(request.auth.uid)).data.connectedPartnerId)
+      );
+      
+      allow create: if isEmailVerified() && isValidId(milestoneId) && incoming().userId == request.auth.uid
+                       && isValidMilestone(incoming())
+                       && (incoming().createdAt == request.time || incoming().createdAt is string);
+                       
+      allow update: if isEmailVerified() && isValidId(milestoneId)
+                       && (
+                         existing().userId == request.auth.uid || 
+                         (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+                          existing().userId == get(/databases/$(database)/documents/users/$(request.auth.uid)).data.connectedPartnerId)
+                       )
+                       && isValidMilestone(incoming())
+                       && incoming().createdAt == existing().createdAt
+                       && incoming().userId == existing().userId;
+                       
+      allow delete: if isEmailVerified() && isValidId(milestoneId) && (
+                       existing().userId == request.auth.uid || 
+                       (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+                        existing().userId == get(/databases/$(database)/documents/users/$(request.auth.uid)).data.connectedPartnerId)
+                     );
+    }
+
+    // Reminders Collection
+    match /reminders/{reminderId} {
+      allow get: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+      
+      allow create: if isEmailVerified() && isValidId(reminderId) && incoming().userId == request.auth.uid
+                       && isValidReminder(incoming())
+                       && incoming().createdAt == request.time;
+                       
+      allow update: if isEmailVerified() && isValidId(reminderId) && incoming().userId == request.auth.uid
+                       && existing().userId == request.auth.uid
+                       && isValidReminder(incoming())
+                       && incoming().createdAt == existing().createdAt
+                       && incoming().userId == existing().userId;
+                       
+      allow delete: if isEmailVerified() && isValidId(reminderId) && existing().userId == request.auth.uid;
+    }
+
+    // Gallery Photo Memories Collection
+    match /gallery_items/{photoId} {
+      allow get, list: if isSignedIn() && (resource.data.userId == request.auth.uid || 
+                       resource.data.partnerId == request.auth.uid);
+      
+      allow create: if isEmailVerified() && isValidId(photoId) && incoming().userId == request.auth.uid
+                       && isValidGalleryItem(incoming())
+                       && (incoming().createdAt == request.time || incoming().createdAt == null);
+                       
+      allow update: if isEmailVerified() && isValidId(photoId) && isValidGalleryItem(incoming())
+                       && (existing().userId == request.auth.uid || existing().partnerId == request.auth.uid)
+                       && (
+                         // Action Option 1: Stamp/Add reaction sticker
+                         (incoming().userId == existing().userId && 
+                          incoming().createdAt == existing().createdAt &&
+                          incoming().title == existing().title &&
+                          incoming().caption == existing().caption &&
+                          incoming().imageUrl == existing().imageUrl &&
+                          incoming().category == existing().category &&
+                          incoming().date == existing().date &&
+                          incoming().diff(existing()).affectedKeys().hasOnly(['reactions']))
+                         || 
+                         // Action Option 2: Full content modification by owner
+                         (incoming().userId == request.auth.uid && existing().userId == request.auth.uid
+                          && incoming().createdAt == existing().createdAt)
+                       );
+                        
+      allow delete: if isEmailVerified() && isValidId(photoId) && existing().userId == request.auth.uid;
+    }
+  }
+}
