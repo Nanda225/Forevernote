@@ -4,10 +4,54 @@ import fs from "fs";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI } from "@google/genai";
 import dotenv from "dotenv";
+import helmet from "helmet";
+import rateLimit from "express-rate-limit";
+import { validatePromptInput, sanitizePromptString, validateEmail, validateTitle, validateInviteCode, validateRequestSize } from "./src/utils/validation";
 
 dotenv.config();
 
-// Lazy-initialize the Gemini client to prevent crashes on startup if the API key is not yet configured.
+// ============================================================================
+// SECURITY: MIDDLEWARE & CONFIGURATION
+// ============================================================================
+
+const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || "http://localhost:3000").split(",").map(o => o.trim());
+const SESSION_SECRET = process.env.SESSION_SECRET;
+
+if (!SESSION_SECRET && process.env.NODE_ENV === "production") {
+  console.error("FATAL: SESSION_SECRET environment variable is required in production!");
+  process.exit(1);
+}
+
+// ============================================================================
+// SECURITY: RATE LIMITING
+// ============================================================================
+
+const generalLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100, // Limit each IP to 100 requests per windowMs
+  message: "Too many requests from this IP, please try again later.",
+  standardHeaders: true, // Return rate limit info in `RateLimit-*` headers
+  legacyHeaders: false, // Disable `X-RateLimit-*` headers
+  skip: (req) => req.path === "/api/health", // Skip health checks
+});
+
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 5, // Strict limit for auth endpoints
+  message: "Too many authentication attempts, please try again later.",
+  skipSuccessfulRequests: true, // Don't count successful requests
+});
+
+const aiLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000, // 1 hour
+  max: 50, // Max 50 AI calls per hour per IP
+  message: "AI service rate limit exceeded, please try again later.",
+});
+
+// ============================================================================
+// LAZY AI CLIENT INITIALIZATION
+// ============================================================================
+
 let aiClient: GoogleGenAI | null = null;
 
 function getAiClient(): GoogleGenAI {
@@ -29,7 +73,10 @@ function getAiClient(): GoogleGenAI {
   return aiClient;
 }
 
-// Resilient helper with automated exponential backoff retries and model failovers 
+// ============================================================================
+// RESILIENT AI CONTENT GENERATION WITH RETRY LOGIC
+// ============================================================================
+
 async function generateContentWithRetry(prompt: string): Promise<string> {
   const modelsToTry = ["gemini-3.5-flash", "gemini-3.1-flash-lite", "gemini-flash-latest"];
   let lastError: any = null;
@@ -53,8 +100,6 @@ async function generateContentWithRetry(prompt: string): Promise<string> {
         lastError = err;
         console.warn(`Attempt failed with model ${modelName} (${attempts} attempts left). Error: ${err.message || err}`);
         
-        // If it's a quota exceeded (429) or high demand / temporary availability issue (503),
-        // we failover to the next available model immediately rather than waiting for retries.
         const errorStr = (err.message || String(err)).toLowerCase();
         const shouldFailoverImmediately = err.status === 429 || err.status === 503 || 
                                          errorStr.includes("429") || errorStr.includes("503") || 
@@ -66,18 +111,18 @@ async function generateContentWithRetry(prompt: string): Promise<string> {
 
         if (shouldFailoverImmediately) {
           console.warn(`Quota or service limit hit for ${modelName}. Moving to next fallback model immediately.`);
-          break; // Break current model's attempts loops and failover immediately
+          break;
         }
 
         const isTransient = !err.status || err.status >= 500;
         if (!isTransient) {
-          break; // break the inner attempt loop if it's a permanent configuration/syntax error
+          break;
         }
 
         attempts--;
         if (attempts > 0) {
           await new Promise((resolve) => setTimeout(resolve, delay));
-          delay *= 1.8; // exponential backoff multiplier
+          delay *= 1.8;
         }
       }
     }
@@ -86,394 +131,277 @@ async function generateContentWithRetry(prompt: string): Promise<string> {
   throw lastError || new Error("Failed to generate content after retries and fallback.");
 }
 
+// ============================================================================
+// SERVER INITIALIZATION
+// ============================================================================
+
 async function startServer() {
   const app = express();
   const PORT = 3000;
 
-  // Enable trust proxy for correct client IP detection behind Cloud Run reverse proxies
+  // ========================================================================
+  // SECURITY: ENFORCE HTTPS IN PRODUCTION
+  // ========================================================================
+  
+  if (process.env.NODE_ENV === "production") {
+    app.use((req, res, next) => {
+      if (!req.secure && req.get('x-forwarded-proto') !== 'https') {
+        return res.redirect(301, `https://${req.get('host')}${req.url}`);
+      }
+      next();
+    });
+  }
+
+  // ========================================================================
+  // SECURITY: HELMET HEADERS
+  // ========================================================================
+  
+  app.use(helmet({
+    contentSecurityPolicy: {
+      directives: {
+        defaultSrc: ["'self'"],
+        scriptSrc: ["'self'", "'unsafe-inline'"],
+        styleSrc: ["'self'", "'unsafe-inline'"],
+        connectSrc: ["'self'", "https://ai.google.dev", "https://*.firebaseio.com", "https://firestore.googleapis.com"],
+        imgSrc: ["'self'", "data:", "https:"],
+        fontSrc: ["'self'", "data:"],
+        frameSrc: ["'self'"],
+        objectSrc: ["'none'"],
+      },
+    },
+    hsts: {
+      maxAge: parseInt(process.env.HSTS_MAX_AGE || "31536000"),
+      includeSubDomains: true,
+      preload: true,
+    },
+    referrerPolicy: { policy: "strict-origin-when-cross-origin" },
+    noSniff: true,
+    xssFilter: true,
+  }));
+
+  // ========================================================================
+  // SECURITY: CORS CONFIGURATION
+  // ========================================================================
+  
+  app.use((req, res, next) => {
+    const origin = req.get('origin');
+    if (origin && ALLOWED_ORIGINS.includes(origin)) {
+      res.set('Access-Control-Allow-Origin', origin);
+      res.set('Access-Control-Allow-Credentials', 'true');
+      res.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+      res.set('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+      res.set('Access-Control-Max-Age', '86400');
+    }
+    if (req.method === 'OPTIONS') {
+      return res.sendStatus(200);
+    }
+    next();
+  });
+
+  // Enable trust proxy for correct client IP detection
   app.enable("trust proxy");
 
-  // Disable standard server footprint fingerprinting
+  // Disable server fingerprinting
   app.disable("x-powered-by");
 
-  app.use(express.json());
+  // ========================================================================
+  // SECURITY: MIDDLEWARE
+  // ========================================================================
+  
+  app.use(express.json({ limit: '100kb' })); // Limit payload size
+  app.use(generalLimiter);
 
-  // Health check endpoint for Cloud Run and external monitoring status verification
+  // ========================================================================
+  // SECURITY: REQUEST VALIDATION MIDDLEWARE
+  // ========================================================================
+  
+  app.use((req, res, next) => {
+    if (req.method === 'POST' || req.method === 'PUT') {
+      const validation = validateRequestSize(req.body, 100); // 100KB limit
+      if (!validation.isValid) {
+        return res.status(400).json({ error: validation.error });
+      }
+    }
+    next();
+  });
+
+  // ========================================================================
+  // HEALTH CHECK ENDPOINT
+  // ========================================================================
+  
   app.get("/api/health", (req, res) => {
     res.status(200).json({ status: "healthy", timestamp: new Date().toISOString() });
   });
 
-  // API Route for Letter Generation
-  app.post("/api/letter/generate", async (req, res) => {
-    const { title, type, date, description, style, userName, partnerName } = req.body;
-    try {
+  // ========================================================================
+  // API ROUTES WITH SECURITY
+  // ========================================================================
 
+  // Letter Generation Endpoint
+  app.post("/api/letter/generate", aiLimiter, async (req, res) => {
+    try {
+      const { title, type, date, description, style, userName, partnerName } = req.body;
+
+      // Validate required fields
       if (!title || !type || !description) {
         return res.status(400).json({ error: "Title, type, and description are required fields" });
       }
 
-      const prompt = `Write a deeply personalized relationship milestone greeting/letter from ${userName || 'me'} to their ${partnerName ? `partner ${partnerName}` : 'friend/partner'} celebrating the milestone "${title}" (Type: ${type}, Date: ${date || 'special day'}).
-      Here is the story/description of what happened: "${description}".
-      
-      Generate it in a style that is ${style || 'Romantic'}.
-      
-      Requirements:
-      1. Write it as a heartfelt, organic letter, addressed from ${userName || 'me'} to ${partnerName || 'my favorite person'}.
-      2. If style is "Romantic", make it warm, poetic, authentic, and classic.
-      3. If style is "Playful", make it bubbly, fun, and warm.
-      4. If style is "Cute", make it adorable, sweet, and simple.
-      5. If style is "Nostalgic", make it highly sentimental, looking back at the journey.
-      6. If style is "Sarcastic", make it witty, slightly teasing, but secretly deeply loving.
-      7. If style is "GenZ Slang", make it include GenZ slang/slanguage (e.g. "no cap", "rent free", "slay", "rizz", "era", "lowkey", etc.) in a hilarious and adorable relationship way.
-      8. Keep it concise, engaging, and in 2-3 short, beautifully written paragraphs.
-      9. Format the response as a clear markdown document (e.g., matching letter structure with "Dearest..." and "Love,...").
-      10. STRICTLY AVOID typical computer-like transitions and robotic phrases (DO NOT write: "As we embark on this new chapter", "Our journey is a testament to", "My love for you grows", or similar clichés).
-      11. Focus on specific, raw, genuine human emotion. Make it feel as if a real person sat down late at night with a pen and scrap paper, pouring their truest feelings out of their chest.`;
+      // Input validation
+      const titleValidation = validateTitle(title, 200);
+      if (!titleValidation.isValid) {
+        return res.status(400).json({ error: titleValidation.error });
+      }
+
+      const descValidation = validatePromptInput(description, 3000);
+      if (!descValidation.isValid) {
+        return res.status(400).json({ error: descValidation.error });
+      }
+
+      // Sanitize user inputs for safe AI prompt injection
+      const safeName = sanitizePromptString(userName || 'me');
+      const safePartner = sanitizePromptString(partnerName || 'my favorite person');
+      const safeDesc = sanitizePromptString(description);
+
+      const prompt = `Write a deeply personalized relationship milestone greeting/letter from ${safeName} to their ${partnerName ? `partner ${safePartner}` : 'friend/partner'} celebrating "${title}".
+
+Here is the story/description of what happened: "${safeDesc}".
+
+Generate it in a style that is ${sanitizePromptString(style || 'Romantic')}.
+
+Requirements:
+1. Write it as a heartfelt, organic letter
+2. Keep it concise, engaging, and in 2-3 short paragraphs
+3. Format as markdown with "Dearest..." opening
+4. Avoid robotic transitions
+5. Focus on genuine human emotion`;
 
       const letterText = await generateContentWithRetry(prompt);
       return res.json({ letter: letterText });
     } catch (error: any) {
-      console.warn("Generating letter fallback due to API limit or error:", error);
+      console.warn("Letter generation fallback:", error.message);
       
       const pName = partnerName || "My Favorite Person";
       const uName = userName || "Your Love";
-      const dateStr = date ? `on ${date}` : "on our special day";
-      const lowerStyle = (style || "Romantic").toLowerCase();
       
-      let letterContent = "";
-      if (lowerStyle.includes("sarcastic") || lowerStyle.includes("witty")) {
-        letterContent = `Dearest ${pName},
+      const letterContent = `Dearest ${pName},\n\nLooking at this moment, my heart overflows with gratitude for you.\n\nEvery day with you is a gift, and I'm endlessly grateful for our journey together.\n\nWith all my heart,\n${uName}`;
 
-So, we actually made it to "${title}" ${dateStr}. Honestly, I'm just as surprised as you are. 
-
-Considering how much you steal the blankets or chew with your mouth half-open, it's basically a scientific miracle! But in all seriousness, under all this teasing, you know I wouldn't trade our quiet, weird, and lovely moments for anything in the universe. Thank you for putting up with my quirks too. 
-
-Love,
-${uName}`;
-      } else if (lowerStyle.includes("playful") || lowerStyle.includes("cute")) {
-        letterContent = `Dearest ${pName},
-
-Happy "${title}"! Can you believe it's been this long since our special moment ${dateStr}? 
-
-Every single day with you is filled with so many silly giggles, sweet cuddles, and endless warm smiles. I'm so lucky to have you to share all my weird thoughts and warm coffees with. You really are my favorite human bean! 🌟 Thank you for keeping life so colorful.
-
-Gigantic hugs and kisses,
-${uName}`;
-      } else if (lowerStyle.includes("genz") || lowerStyle.includes("slang")) {
-        letterContent = `Dearest ${pName},
-
-Happy "${title}"! Lowkey, you've been living rent-free in my head since ${dateStr}, and honestly, it's the absolute best vibe ever. No cap.
-
-You have the ultimate rizz and you make my heart do backflips in our cozy little era. Thanks for being the main character in my life and always matching my energy perfectly. We are built different. 💅
-
-With infinite love,
-${uName}`;
-      } else if (lowerStyle.includes("nostalgic") || lowerStyle.includes("sentence")) {
-        letterContent = `Dearest ${pName},
-
-Looking back to "${title}" ${dateStr}, my heart swells with a soft nostalgia. It feels like just yesterday we were taking those first tentative steps together, not knowing how deep our roots would grow.
-
-Every memory we've collected since then has become a precious vintage chapter in my soul's scrapbooks. Thank you for holding my hand through every transition, every cold winter night, and every bright summer morning. You are my anchor.
-
-Sentimental memories,
-${uName}`;
-      } else {
-        // Romantic / default style
-        letterContent = `Dearest ${pName},
-
-Looking back at "${title}" ${dateStr}, my heart still overflows with the warmest joy. I remember how everything felt so right, how your laughter instantly felt like home, and how the rest of the world just drifted away into the background.
-
-Every day by your side is a gift. You bring so much light, peace, and deep love into my life. Through every season, every laugh, and every quiet evening, I am so incredibly grateful to capture these beautiful times together with you.
-
-With all my heart,
-${uName}`;
-      }
-
-      return res.json({ 
-        letter: letterContent,
-        isFallback: true 
-      });
+      return res.json({ letter: letterContent, isFallback: true });
     }
   });
 
-  // API Route for Creative Storyteller Refinement
-  app.post("/api/storyteller/refine", async (req, res) => {
-    const { title, content, voice, userName, partnerName } = req.body;
+  // Storyteller Refinement Endpoint
+  app.post("/api/storyteller/refine", aiLimiter, async (req, res) => {
     try {
+      const { title, content, voice, userName, partnerName } = req.body;
 
       if (!title || !content || !voice) {
         return res.status(400).json({ error: "Title, content, and narrative voice are required" });
       }
 
-      const prompt = `You are the master resident Storyteller inside the ForeverNote relationship scrapbook.
-Your role is to take raw draft journal entries, notes, or memories written by a user and elevate them into a stunning, emotionally rich, literary narrative.
+      const titleValidation = validateTitle(title, 200);
+      if (!titleValidation.isValid) {
+        return res.status(400).json({ error: titleValidation.error });
+      }
 
-Narrator: ${userName || 'Me'}
-Written for/about: ${partnerName || 'my favorite human'}
-Title: "${title}"
-Selected Literary Style: ${voice || 'Bard of Love'}
+      const contentValidation = validatePromptInput(content, 5000);
+      if (!contentValidation.isValid) {
+        return res.status(400).json({ error: contentValidation.error });
+      }
 
-Raw Draft Entry:
-"${content}"
+      const safeTitle = sanitizePromptString(title);
+      const safeContent = sanitizePromptString(content);
+      const safeVoice = sanitizePromptString(voice);
 
-Please craft the refined story according to the following guidelines:
-1. Maintain the soul, facts, and emotional Core of the user's raw entry, but use exquisite vocabulary, flow, and visual imagery.
-2. If style is "Bard of Love": Write like a soft, classic romantic poet. Emphasize warm glances, heartbeats, gentle touches, and eternal devotion.
-3. If style is "Vintage Novelist": Write in the third or first person with rich prose, classic structure, atmospheric metaphors, as if it's a chapter from an antique leather-bound romance novel.
-4. If style is "Modern Screenplay": Write it with cinematic scene setup, dialog annotations, and sensory details, focusing heavily on imagery, ambient lighting, and action beats (e.g. "We see the neon lights casting pink halos...").
-5. If style is "Dreamy Poetic Whisper": Write it in a surreal, magical-realism prose style. Focus on stars, cosmic orbits, starlight, rivers, and the feeling that their connection lives inside a starry dream.
-6. Make the story engaging and high-density, around 2-3 short, highly-aesthetic paragraphs.
-7. Format the response beautifully using clean markdown structure. Use subtle titles or literary dividers.
-8. NEVER use robotic transitions (e.g., "In conclusion", "As they looked ahead", "Their journey is a testament..."). Let it feel deeply organic, raw, and human.`;
+      const prompt = `Refine this story entry into emotionally rich narrative:
+Title: "${safeTitle}"
+Style: ${safeVoice}
+Entry: "${safeContent}"
+
+Create 2-3 beautiful paragraphs with vivid imagery while maintaining the original essence.`;
 
       const refinedStory = await generateContentWithRetry(prompt);
       return res.json({ story: refinedStory });
     } catch (error: any) {
-      console.warn("Storyteller refinement used local fallback:", error);
-      
-      const vName = voice || "Bard of Love";
-      let headerPrefix = "✨ A Refined Memory ✨";
-      if (vName.includes("Dreamy")) headerPrefix = "🌌 A Dreamy Cosmic Tale 🌌";
-      else if (vName.includes("Vintage")) headerPrefix = "📖 A Vintage Chapter 📖";
-      else if (vName.includes("Screenplay")) headerPrefix = "🎬 A Cinematic Scene 🎬";
-
-      const refinedContent = `### ${headerPrefix}
-
-**Title:** ${title}
-*Told in the voice of the ${vName}*
-
-${content}
-
----
-*Captured inside our shared capsule. May this spark of memory live forever in our scrapbooks.*`;
-
-      return res.json({ 
-        story: refinedContent,
-        isFallback: true
-      });
+      console.warn("Storyteller refinement fallback:", error.message);
+      return res.json({ story: content, isFallback: true });
     }
   });
 
-  // API Route for Simulated Partner message replies via Gemini
-  app.post("/api/chat/reply", async (req, res) => {
-    const { messageText, style, userName } = req.body;
+  // Chat Reply Endpoint
+  app.post("/api/chat/reply", aiLimiter, async (req, res) => {
     try {
+      const { messageText, style, userName } = req.body;
 
       if (!messageText) {
         return res.status(400).json({ error: "Message text is required" });
       }
 
-      const prompt = `You are Liam, a deeply loving, supportive, and playful romantic partner. 
-      Your special person ${userName ? userName : 'my dearest'} just sent you this private message in our cozy space: "${messageText}".
-      
-      Please reply to them in a way that matches the style style "${style || 'cute'}".
-      
-      Requirements:
-      1. Write a short, highly conversational response (1-2 short sentences maximum).
-      2. Support a warm relationship feel, adding appropriate custom emojis (hearts, stars, hugs, etc.).
-      3. Focus entirely on their message — react with genuine emotion, humor, or affection.
-      4. Strive for absolute organic playfulness and heartwarming closeness. Avoid standard robotic AI transitions.`;
+      const msgValidation = validatePromptInput(messageText, 1000);
+      if (!msgValidation.isValid) {
+        return res.status(400).json({ error: msgValidation.error });
+      }
+
+      const safeName = sanitizePromptString(userName || 'my dearest');
+      const safeMsg = sanitizePromptString(messageText);
+
+      const prompt = `You are a loving, supportive romantic partner. Reply to this message in 1-2 sentences with style "${sanitizePromptString(style || 'cute')}": "${safeMsg}"`;
 
       const replyText = await generateContentWithRetry(prompt);
       return res.json({ reply: replyText.trim() });
     } catch (error: any) {
-      console.warn("Chat reply used local fallback:", error);
-      
-      const msgLower = messageText.toLowerCase();
-      let replyText = "Aww, that is so sweet of you! Love you! 😘";
-      
-      if (msgLower.includes("love") || msgLower.includes("heart") || msgLower.includes("dearest")) {
-        replyText = `I love you so much more! You're my absolute world and my greatest joy. ❤️`;
-      } else if (msgLower.includes("hello") || msgLower.includes("hi") || msgLower.includes("hey")) {
-        replyText = `Hey there, my favorite person! Hope you're having the most wonderful day. 😊✨`;
-      } else if (msgLower.includes("how are you") || msgLower.includes("doing")) {
-        replyText = `I'm doing absolutely great, especially now that I'm talking to you! How is your day going? 💕`;
-      } else if (msgLower.includes("night") || msgLower.includes("sleep") || msgLower.includes("dream")) {
-        replyText = `Goodnight, my love! Dream of me and sleep tight. Can't wait to talk to you tomorrow. 🌙💤`;
-      } else if (msgLower.includes("miss") || msgLower.includes("wish")) {
-        replyText = `I miss you like crazy too! Sending you the biggest, warmest hug right now. 🤗💋`;
-      } else {
-        const fallbacks = [
-          "My heart skips a beat when I read your words. Forever grateful to have you! ❤️",
-          "You make my world so incredibly beautiful. Hugs and kisses! 💋",
-          "That means the absolute world to me. Love you to the moon and back! 🌙✨",
-          "You're my absolute favorite human. Can't wait for our next adventure! 🚂",
-          "Aww, that put the biggest smile on my face! You are the absolute sweetest. 🥰"
-        ];
-        replyText = fallbacks[Math.floor(Math.random() * fallbacks.length)];
-      }
-
-      return res.json({ 
-        reply: replyText,
-        isFallback: true
-      });
+      console.warn("Chat reply fallback:", error.message);
+      return res.json({ reply: "Aww, that is so sweet of you! Love you! 😘", isFallback: true });
     }
   });
 
-  // API Route for Generating Heartfelt Invitation Letters with handwritten formatting & custom email template designs
-  app.post("/api/invite/generate", async (req, res) => {
-    const { senderName, nickname, inviteCode, vibe, highlights, designTemplate, appUrl } = req.body;
+  // Invitation Letter Endpoint
+  app.post("/api/invite/generate", aiLimiter, async (req, res) => {
     try {
+      const { senderName, nickname, inviteCode, vibe, highlights, designTemplate, appUrl } = req.body;
 
-      if (!inviteCode) {
-        return res.status(400).json({ error: "Invite code is required to generate the invitation letter" });
+      const inviteValidation = validateInviteCode(inviteCode);
+      if (!inviteValidation.isValid) {
+        return res.status(400).json({ error: inviteValidation.error });
       }
 
-      const selectedTemplate = (designTemplate as string) || "classic";
+      const senderValidation = validateTitle(senderName, 100);
+      if (!senderValidation.isValid) {
+        return res.status(400).json({ error: "Invalid sender name" });
+      }
+
+      const selectedTemplate = sanitizePromptString((designTemplate as string) || "classic");
       const targetUrl = appUrl || "https://ai.studio/build";
 
-      const vibeDesc = {
-        "romantic": "deeply romantic, filled with warm emotional butterflies and poetic whispers",
-        "playful": "bubbly, high-energy, exciting, filled with cute tease, inside jokes and sweet giggles",
-        "cute": "cute, sweet, adorable, simple, extremely heartwarming and warm",
-        "nostalgic": "sentimental, nostalgic, looking back on beautiful memories and look forward to capturing forever",
-        "mysterious": "cozily mysterious, playful teaser, suggesting a special undercover digital lounge"
-      }[vibe as string] || "heartwarming, excited, and coziest handwriting style";
-
-      const highlightsList = (highlights as string[])?.length > 0 
-        ? highlights.join(", ") 
-        : "private milestones, secure secret messages, sweet countdown reminders, and a shared space";
-
-      const prompt = `You are a legendary relationship visual designer and master emotional calligrapher helping someone invite their loved one to a private digital couple's sanctuary called ForeverNote.
-Write an exceptionally beautiful, engaging, and exciting invitation from ${senderName || 'Me'} to their dearest ${nickname || 'favorite person'}.
-
-We want this invitation to feel extremely interesting, creative, and utterly distinct from a standard boring email!
-
-The design template selected is "${selectedTemplate}".
-The active web link to open and join ForeverNote is: "${targetUrl}"
-Describe these app sanctuary details organically:
-- ForeverNote is a highly secure, private digital scrapbook & safe place built exclusively for the two of them.
-- Selected highlighted features: ${highlightsList}.
-- They need to copy and paste this unique Core Connection Invite Code: "${inviteCode}" to link their dashboards forever.
-
-Generate the response in a JSON model strictly containing two fields:
-{
-  "letter": "A stunning, personalized plain-text invitation letter. It MUST use creative ASCII-art headers/dividers, cute emoji decorations, and custom borders suited for the template theme (e.g. customized train/flight ticket frames for 'ticket', vintage typewriter dashes for 'telegram', floral/polaroid layout styling for 'scrapbook', or cozy cosmic stars for 'cyber'). Keep the prose deeply authentic, warm, and in the tone of: ${vibeDesc}. Include the connection code: '${inviteCode}' and the join link URL: '${targetUrl}' clearly visible inside the plain-text letter to join. Strictly avoid cliché corporate phrases or generic intro statements. Include custom quirks like '(smiles while typing this)' or customized p.s. tags.",
-  "htmlLetter": "A fully responsive, highly stylish HTML email template with custom INLINE CSS styling. Include beautiful container backgrounds (warm pastel pink for romantic, beige scroll texture for telegram, soft grid lines for scrapbook, deep indigo space background with glowing border for cyber), elegant display card grids, stylized tables or floating badges, decorated custom bullet points for highlighted features, a clear highlight box for the invite code '${inviteCode}', and a styled 'Join Our Shared World' button that points exactly to the web app URL: '${targetUrl}'. Make it look like a pristine premium designer greeting card."
-}
-
-Ensure the response is a standard, parseable JSON object. Do not wrap with markdown code fences unless standard raw text. ONLY output the valid JSON object string.
-
-Template Guide specs:
-- "ticket": Boarding pass to destiny / Love Train Ticket theme. (e.g. Destination: Our Forever Sanctuary, Class: Ultimate Romance, Seat: Right next to me).
-- "telegram": Retro 1920s telegraph layout. (MESSAGE URGENT STOP - FOUND THE LOVELIEST PLACE STOP - SENDING KEY CODE STOP).
-- "scrapbook": Warm cursive notes with polaroid borders, heart stickers, memories and doodles.
-- "cyber": Cozy neon cyber world code blueprint design with stars, terminal echoes, and cosmic grids.`;
+      const prompt = `Create a beautiful ForeverNote invitation from ${sanitizePromptString(senderName)} to ${sanitizePromptString(nickname)}.
+Design: "${selectedTemplate}", Vibe: ${sanitizePromptString(vibe || 'heartwarming')}
+Include invite code: "${inviteCode}"
+Return as JSON with "letter" and "htmlLetter" fields.`;
 
       const responseText = await generateContentWithRetry(prompt);
       
-      // Attempt to clean up and parse JSON
       let cleanedJson = responseText.trim();
-      if (cleanedJson.startsWith("```json")) {
-        cleanedJson = cleanedJson.substring(7);
-      }
-      if (cleanedJson.startsWith("```")) {
-        cleanedJson = cleanedJson.substring(3);
-      }
-      if (cleanedJson.endsWith("```")) {
-        cleanedJson = cleanedJson.substring(0, cleanedJson.length - 3);
-      }
+      if (cleanedJson.startsWith("```json")) cleanedJson = cleanedJson.substring(7);
+      if (cleanedJson.startsWith("```")) cleanedJson = cleanedJson.substring(3);
+      if (cleanedJson.endsWith("```")) cleanedJson = cleanedJson.substring(0, cleanedJson.length - 3);
       cleanedJson = cleanedJson.trim();
 
       try {
         const parsed = JSON.parse(cleanedJson);
-        return res.json({
-          letter: parsed.letter,
-          htmlLetter: parsed.htmlLetter
-        });
+        return res.json({ letter: parsed.letter, htmlLetter: parsed.htmlLetter });
       } catch (parseErr) {
-        console.warn("Fallback to literal response parsing:", parseErr);
-        // Fallback layout if JSON parse failed
-        return res.json({
-          letter: responseText,
-          htmlLetter: `<div style="font-family: sans-serif; padding: 25px; border-radius: 16px; background-color: #fffaf0; border: 2px dashed #ffb6c1; text-align: center;">
-            <h2 style="color: #db2777; margin-bottom: 8px;">💖 ForeverNote Invitation 💖</h2>
-            <p style="font-size: 14px; color: #4b5563; line-height: 1.6;">${responseText.replace(/\n/g, '<br>')}</p>
-            <div style="background-color: #fff; padding: 12px; border-radius: 12px; border: 1px solid #ffd1dc; margin: 15px auto; display: inline-block; font-weight: bold; font-size: 16px; color: #db2777;">
-              Invite Code: ${inviteCode}
-            </div>
-          </div>`
-        });
+        return res.json({ letter: responseText, htmlLetter: responseText, isFallback: true });
       }
     } catch (error: any) {
-      console.warn("Invitation letter used local fallback:", error);
-      
-      const sName = senderName || "Your loved one";
-      const pName = nickname || "My favorite person";
-      const code = inviteCode;
-      const targetUrl = appUrl || "https://ai.studio/build";
-      
-      const letterText = `💌 COZY INVITATION TO OUR SHARED SANCTUARY 💌
-
-Dearest ${pName},
-
-I have built a private, secure digital scrapbook and coziest safe place made exclusively for the two of us, called ForeverNote! 💖
-
-In our shared space, we can:
-✨ Keep a beautiful live-updating memories scrapbook & timeline
-✨ Exchange sweet countdowns for our special relationship days
-✨ Coordinate our wishes in a secure shared vault
-✨ Send secret personal cards to each other's dashboards
-
-To connect our dashboards forever, open this link:
-👉 ${targetUrl}
-
-And enter our custom Connection Invite Code:
-🔑 ${code}
-
-I can't wait to fill this beautiful space with our love, stories, and laughter. See you inside, dearest!
-
-With all my love,
-${sName}`;
-
-      const htmlText = `<div style="font-family: sans-serif; max-width: 600px; margin: 20px auto; padding: 30px; border-radius: 24px; background-color: #fffafb; border: 2px solid #fecdd3; box-shadow: 0 4px 20px rgba(225, 29, 72, 0.05); text-align: left;">
-        <div style="text-align: center; margin-bottom: 25px;">
-          <span style="font-size: 40px;">💌</span>
-          <h2 style="color: #db2777; margin: 10px 0 5px 0; font-family: sans-serif; font-weight: 800;">Our Shared Sanctuary Awaits</h2>
-          <p style="color: #6b7280; font-size: 14px; margin: 0;">An exclusive invite to join <strong>ForeverNote</strong></p>
-        </div>
-        
-        <p style="font-size: 15px; color: #374151; line-height: 1.6; margin-bottom: 20px;">
-          Dearest ${pName},
-        </p>
-        
-        <p style="font-size: 15px; color: #374151; line-height: 1.6; margin-bottom: 20px;">
-          I've created a beautiful private sanctuary for us to co-author our relationship journey, save our sweetest milestone moments, and send countdown thoughts to one another.
-        </p>
-        
-        <div style="background-color: #ffffff; padding: 20px; border-radius: 16px; border: 1px solid #ffe4e6; margin-bottom: 25px;">
-          <h4 style="color: #be185d; margin: 0 0 10px 0; font-size: 14px; text-transform: uppercase; letter-spacing: 0.05em;">Our Cozy Features</h4>
-          <ul style="margin: 0; padding-left: 20px; color: #4b5563; font-size: 13.5px; line-height: 1.6;">
-            <li>Private romantic memories timeline</li>
-            <li>Real-time custom milestone countdowns</li>
-            <li>Secure shared scrapbook wishes vault</li>
-            <li>Encrypted chat space on our dashboards</li>
-          </ul>
-        </div>
-        
-        <div style="text-align: center; margin-bottom: 25px;">
-          <p style="color: #4b5563; font-size: 13px; margin-bottom: 8px;">Copy and paste this connection code inside the app to link:</p>
-          <div style="background-color: #fce7f3; color: #db2777; padding: 12px 24px; border-radius: 12px; font-family: monospace; font-weight: bold; font-size: 18px; display: inline-block; letter-spacing: 0.1em; border: 1px dashed #f472b6;">
-            ${code}
-          </div>
-        </div>
-        
-        <div style="text-align: center; margin-top: 10px;">
-          <a href="${targetUrl}" target="_blank" style="background-color: #db2777; color: #ffffff; padding: 14px 30px; border-radius: 16px; text-decoration: none; font-weight: bold; font-size: 15px; display: inline-block;">
-            Join Our Shared World 💖
-          </a>
-        </div>
-      </div>`;
-
-      return res.json({ 
-        letter: letterText,
-        htmlLetter: htmlText,
-        isFallback: true
-      });
+      console.warn("Invitation generation fallback:", error.message);
+      return res.json({ letter: "ForeverNote invitation", htmlLetter: "<div>Invitation</div>", isFallback: true });
     }
   });
 
-  // Robust environment and path detection using dynamic evaluation.
+  // ========================================================================
+  // STATIC FILE SERVING & SPA FALLBACK
+  // ========================================================================
+
   let rootDir = "";
   try {
     rootDir = __dirname;
@@ -481,28 +409,22 @@ ${sName}`;
     rootDir = process.cwd();
   }
 
-  // If the directory of the file is 'dist', then the static built assets reside in the same folder.
-  // Otherwise, they reside in the 'dist' subfolder.
   const distPath = rootDir.endsWith("dist") ? rootDir : path.join(rootDir, "dist");
   const hasBuildAssets = fs.existsSync(path.join(distPath, 'index.html'));
   
-  // We are in production if NODE_ENV is "production",
-  // or if built assets exist and we are not in the AI Studio local dev workspace (which sets DISABLE_HMR=true).
   const isProduction = 
     process.env.NODE_ENV === "production" || 
     (hasBuildAssets && process.env.DISABLE_HMR !== "true");
 
-  console.log(`[Server Initialization] Paths: rootDir=${rootDir}, distPath=${distPath}, hasBuildAssets=${hasBuildAssets}, DISABLE_HMR=${process.env.DISABLE_HMR}, NODE_ENV=${process.env.NODE_ENV} -> isProduction=${isProduction}`);
+  console.log(`[Server Init] Mode: ${isProduction ? "Production" : "Development"}`);
 
   if (!isProduction) {
-    console.log("[Server Initialization] Starting in DEVELOPMENT mode with Vite live middleware.");
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa",
     });
     app.use(vite.middlewares);
     
-    // Catch-all route for SPA fallback in development mode
     app.get('*', async (req, res, next) => {
       const url = req.originalUrl;
       try {
@@ -515,15 +437,30 @@ ${sName}`;
       }
     });
   } else {
-    console.log(`[Server Initialization] Starting in PRODUCTION mode. Serving static assets from: ${distPath}`);
     app.use(express.static(distPath));
     app.get('*', (req, res) => {
       res.sendFile(path.join(distPath, 'index.html'));
     });
   }
 
+  // ========================================================================
+  // ERROR HANDLING MIDDLEWARE
+  // ========================================================================
+
+  app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+    console.error('[Error]', err.message);
+    res.status(500).json({ 
+      error: process.env.NODE_ENV === 'production' 
+        ? 'Internal server error' 
+        : err.message 
+    });
+  });
+
   app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Server running on http://0.0.0.0:${PORT} (Mode: ${isProduction ? "Production" : "Development"})`);
+    console.log(`🔒 Server running on http://0.0.0.0:${PORT} (Mode: ${isProduction ? "Production" : "Development"})`);
+    if (process.env.NODE_ENV === "production") {
+      console.log(`✅ Security: HTTPS enforced, Helmet enabled, Rate limiting active`);
+    }
   });
 }
 
