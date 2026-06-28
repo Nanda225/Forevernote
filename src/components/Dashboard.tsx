@@ -79,6 +79,7 @@ export default function Dashboard({ user, onSignOut, urlInviteCode }: DashboardP
 
   // Database States
   const [profile, setProfile] = useState<UserProfile | null>(null);
+  const [partnerProfile, setPartnerProfile] = useState<any>(null);
   const [milestones, setMilestones] = useState<Milestone[]>([]);
   const [reminders, setReminders] = useState<Reminder[]>([]);
   
@@ -113,6 +114,16 @@ export default function Dashboard({ user, onSignOut, urlInviteCode }: DashboardP
   const [connectError, setConnectError] = useState("");
   const [connectLoading, setConnectLoading] = useState(false);
   const [autoPairAttempted, setAutoPairAttempted] = useState(false);
+
+  // Shared/synced romantic anniversary date across the pair
+  const effectiveAnniversaryDate = profile?.anniversaryDate || partnerProfile?.anniversaryDate || "";
+
+  // Auto-fill form field with effective anniversary once loaded/synced
+  useEffect(() => {
+    if (effectiveAnniversaryDate && !profAnniversary) {
+      setProfAnniversary(effectiveAnniversaryDate);
+    }
+  }, [effectiveAnniversaryDate, profAnniversary]);
 
   // Email Invitation States
   const [connectSubTab, setConnectSubTab] = useState<'pair' | 'email'>('pair');
@@ -337,6 +348,98 @@ export default function Dashboard({ user, onSignOut, urlInviteCode }: DashboardP
 
     return () => unsubProfile();
   }, [user]);
+
+  // Helper to format last active status in a beautifully clean way
+  const formatFriendlyActiveStatus = (isoString?: string | null): string => {
+    if (!isoString) return "Never";
+    try {
+      const visitedDate = new Date(isoString);
+      const now = new Date();
+      const diffMs = now.getTime() - visitedDate.getTime();
+      const diffMins = Math.floor(diffMs / 60000);
+      
+      if (diffMins < 1) return "Just now";
+      if (diffMins < 60) return `${diffMins}m ago`;
+      
+      const diffHours = Math.floor(diffMins / 60);
+      if (diffHours < 24) return `${diffHours}h ago`;
+      
+      return visitedDate.toLocaleDateString('en-US', {
+        month: 'short',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit'
+      });
+    } catch (e) {
+      return "Recently";
+    }
+  };
+
+  // 1b. Log current user's visit on mount / initial load
+  useEffect(() => {
+    if (!user?.uid) return;
+    
+    const logVisit = async () => {
+      try {
+        const userRef = doc(db, "users", user.uid);
+        await updateDoc(userRef, {
+          lastVisitedAt: new Date().toISOString()
+        });
+        console.log(`[Dashboard] Logged visit timestamp for user ${user.uid}`);
+      } catch (err) {
+        console.error("[Dashboard] Error logging visit timestamp:", err);
+      }
+    };
+    
+    logVisit();
+  }, [user?.uid]);
+
+  // 1c. Partner Profile Subscription (retrieves real-time visited and details)
+  useEffect(() => {
+    if (!profile?.connectedPartnerId) {
+      setPartnerProfile(null);
+      return;
+    }
+    
+    const unsubPartner = onSnapshot(doc(db, "users", profile.connectedPartnerId), (docSnap) => {
+      if (docSnap.exists()) {
+        const data = docSnap.data();
+        setPartnerProfile({
+          id: docSnap.id,
+          name: data.name || "Cozy Partner",
+          email: data.email || "",
+          lastVisitedAt: data.lastVisitedAt || null,
+          inviteCode: data.inviteCode || "",
+          anniversaryDate: data.anniversaryDate || "",
+        });
+      }
+    }, (err) => {
+      console.error("[Dashboard] Partner profile subscription error:", err);
+    });
+    
+    return () => unsubPartner();
+  }, [profile?.connectedPartnerId]);
+
+  // 1d. Background Auto-Sync for Relationship Anniversary Date
+  // Since security rules restrict direct writes to the partner's user document, we sync reactively.
+  // When a change in the partner's anniversaryDate is detected (or if we don't have one set but our partner does),
+  // we automatically update our own user profile to match so that both dashboards are perfectly synchronized.
+  useEffect(() => {
+    if (!user?.uid || !profile || !partnerProfile) return;
+    
+    const myAnniversary = profile.anniversaryDate || "";
+    const partnerAnniversary = partnerProfile.anniversaryDate || "";
+    
+    if (partnerAnniversary && myAnniversary !== partnerAnniversary) {
+      console.log(`[AnniversarySync] Syncing anniversaryDate from partner: "${partnerAnniversary}" (ours was "${myAnniversary}")`);
+      const userRef = doc(db, "users", user.uid);
+      updateDoc(userRef, {
+        anniversaryDate: partnerAnniversary
+      }).catch(err => {
+        console.error("[AnniversarySync] Error updating our anniversaryDate:", err);
+      });
+    }
+  }, [user?.uid, profile?.anniversaryDate, partnerProfile?.anniversaryDate]);
 
   // Background Auto-Heal: Ensures that any gallery photos uploaded by the current user are immediately synced
   // with their partnerId as soon as a partner connection is detected, ensuring real-time cross-client reflecting.
@@ -633,14 +736,14 @@ export default function Dashboard({ user, onSignOut, urlInviteCode }: DashboardP
       };
 
       if (activeId === "relationship_anniversary") {
-        if (profile?.anniversaryDate) {
-          targetDate = getNextAnniversary(profile.anniversaryDate);
+        if (effectiveAnniversaryDate) {
+          targetDate = getNextAnniversary(effectiveAnniversaryDate);
           label = "Couple Relationship Anniversary";
         }
       } else if (activeId === "days_together_milestone") {
-        if (profile?.anniversaryDate) {
+        if (effectiveAnniversaryDate) {
           try {
-            const startStr = profile.anniversaryDate;
+            const startStr = effectiveAnniversaryDate;
             const start = new Date(startStr);
             start.setHours(0, 0, 0, 0);
             const todayClean = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 0, 0, 0, 0);
@@ -684,12 +787,12 @@ export default function Dashboard({ user, onSignOut, urlInviteCode }: DashboardP
       if (!targetDate) {
         const candidates: { date: Date; label: string }[] = [];
 
-        if (profile?.anniversaryDate) {
-          const rAnn = getNextAnniversary(profile.anniversaryDate);
+        if (effectiveAnniversaryDate) {
+          const rAnn = getNextAnniversary(effectiveAnniversaryDate);
           if (rAnn) candidates.push({ date: rAnn, label: "Couple Relationship Anniversary" });
 
           try {
-            const start = new Date(profile.anniversaryDate);
+            const start = new Date(effectiveAnniversaryDate);
             start.setHours(0, 0, 0, 0);
             const todayClean = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 0, 0, 0, 0);
             const diffMs = todayClean.getTime() - start.getTime();
@@ -744,7 +847,7 @@ export default function Dashboard({ user, onSignOut, urlInviteCode }: DashboardP
     }, 1000);
 
     return () => clearInterval(interval);
-  }, [activeMilestones, profile?.anniversaryDate, profile?.activeCountdownId, localPinnedId]);
+  }, [activeMilestones, effectiveAnniversaryDate, profile?.activeCountdownId, localPinnedId]);
 
   // Compute Smart Notifications dynamically
   const getSmartNotifications = () => {
@@ -789,7 +892,7 @@ export default function Dashboard({ user, onSignOut, urlInviteCode }: DashboardP
 
     // Default notifications if none exist
     if (list.length === 0) {
-      if (profile?.anniversaryDate) {
+      if (effectiveAnniversaryDate) {
         list.push({
           key: "default-clock",
           text: "Your Couple Space is active! Ticking down countdown milestones in real time. 💫",
@@ -1434,7 +1537,7 @@ export default function Dashboard({ user, onSignOut, urlInviteCode }: DashboardP
     let finalIsOneTime = newSpecialIsOneTime;
 
     if (newSpecialMode === "days") {
-      if (!profile?.anniversaryDate) {
+      if (!effectiveAnniversaryDate) {
         showNotification("error", "Please configure your Relationship Anniversary start date in Settings first to add reminders by days.");
         return;
       }
@@ -1445,7 +1548,7 @@ export default function Dashboard({ user, onSignOut, urlInviteCode }: DashboardP
       }
       
       try {
-        const start = new Date(profile.anniversaryDate);
+        const start = new Date(effectiveAnniversaryDate);
         start.setDate(start.getDate() + daysCount);
         const y = start.getFullYear();
         const m = String(start.getMonth() + 1).padStart(2, '0');
@@ -1597,7 +1700,10 @@ export default function Dashboard({ user, onSignOut, urlInviteCode }: DashboardP
           <div className="flex items-center gap-2 sm:gap-3 shrink-0">
             
             {/* Logged in Profiles Info Badge - responsive & non-overlapping truncating wrapper */}
-            <span className="text-[11px] text-slate-500 font-black hidden md:inline-flex items-center gap-1.5 bg-slate-50 border border-slate-205/60 rounded-full px-3 py-1.5 max-w-[280px] lg:max-w-[360px] truncate">
+            <span 
+              className="text-[11px] text-slate-500 font-black hidden md:inline-flex items-center gap-1.5 bg-slate-50 border border-slate-205/60 rounded-full px-3 py-1.5 max-w-[280px] lg:max-w-[360px] truncate cursor-help"
+              title={profile?.partnerName ? `${profile?.name || user.displayName} & ${profile.partnerName} connected. Partner last active: ${formatFriendlyActiveStatus(partnerProfile?.lastVisitedAt)}` : `Waiting for partner...`}
+            >
               <Smile className="w-4 h-4 text-pink-400 shrink-0" />
               <span className="truncate max-w-[80px]" title={profile?.name || user.displayName}>
                 {profile?.name || user.displayName}
@@ -1608,7 +1714,10 @@ export default function Dashboard({ user, onSignOut, urlInviteCode }: DashboardP
                   <span className="text-pink-600 truncate max-w-[80px]" title={profile.partnerName}>
                     {profile.partnerName}
                   </span>
-                  <span className="text-rose-500 shrink-0">❤️</span>
+                  <span className="relative flex h-2 w-2 ml-0.5 shrink-0" title={`Partner Active: ${formatFriendlyActiveStatus(partnerProfile?.lastVisitedAt)}`}>
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                    <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                  </span>
                 </>
               )}
             </span>
@@ -3549,9 +3658,8 @@ export default function Dashboard({ user, onSignOut, urlInviteCode }: DashboardP
                 {/* Decorative sparkles */}
                 <div className="absolute top-4 right-4 text-pink-300 pointer-events-none text-lg">✨</div>
                 
-                {profile?.anniversaryDate ? (() => {
-                  const start = new Date(profile.anniversaryDate);
-                  start.setHours(0, 0, 0, 0);
+                {effectiveAnniversaryDate ? (() => {
+                  const start = new Date(effectiveAnniversaryDate);
                   const todayClean = new Date();
                   todayClean.setHours(0, 0, 0, 0);
                   const diffMs = todayClean.getTime() - start.getTime();
@@ -3588,7 +3696,7 @@ export default function Dashboard({ user, onSignOut, urlInviteCode }: DashboardP
                           </span>
                         </div>
                         <p className="text-xs text-slate-500 font-semibold font-sans pt-1">
-                          Since your chemistry start date: <strong className="text-[#7F1D1D] font-mono">{profile.anniversaryDate}</strong>
+                          Since your chemistry start date: <strong className="text-[#7F1D1D] font-mono">{effectiveAnniversaryDate}</strong>
                         </p>
                       </div>
                       
@@ -3755,16 +3863,16 @@ export default function Dashboard({ user, onSignOut, urlInviteCode }: DashboardP
                     </button>
                     <button
                       type="button"
-                      disabled={!profile?.anniversaryDate}
+                      disabled={!effectiveAnniversaryDate}
                       onClick={() => setNewSpecialMode("days")}
                       className={`px-3 py-1.5 text-[10px] font-black rounded-lg transition-all flex items-center gap-1 ${
-                        !profile?.anniversaryDate ? "opacity-50 cursor-not-allowed" : ""
+                        !effectiveAnniversaryDate ? "opacity-50 cursor-not-allowed" : ""
                       } ${
                         newSpecialMode === "days"
                           ? "bg-white text-[#7F1D1D] shadow-3xs"
                           : "text-slate-500 hover:text-slate-800"
                       }`}
-                      title={!profile?.anniversaryDate ? "Please save Relationship Anniversary in settings first" : "Specify in number of days from start date"}
+                      title={!effectiveAnniversaryDate ? "Please save Relationship Anniversary in settings first" : "Specify in number of days from start date"}
                     >
                       💞 Love Journey Day
                     </button>
@@ -3839,9 +3947,9 @@ export default function Dashboard({ user, onSignOut, urlInviteCode }: DashboardP
                     </label>
                   </div>
                 )}
-                {newSpecialMode === "days" && profile?.anniversaryDate && (
+                {newSpecialMode === "days" && effectiveAnniversaryDate && (
                   <p className="text-[10px] text-slate-400 font-semibold pl-1">
-                    Will calculate date based on start date ({profile.anniversaryDate}). Entered milestone will count down as a single-occurrence landmark.
+                    Will calculate date based on start date ({effectiveAnniversaryDate}). Entered milestone will count down as a single-occurrence landmark.
                   </p>
                 )}
               </div>
@@ -3865,12 +3973,12 @@ export default function Dashboard({ user, onSignOut, urlInviteCode }: DashboardP
                   };
 
                   const virtualItems: any[] = [];
-                  if (profile?.anniversaryDate) {
+                  if (effectiveAnniversaryDate) {
                     // Started Day
                     virtualItems.push({
                       id: "virtual_started_day",
                       title: "Our Love Journey Started Day 💖",
-                      date: profile.anniversaryDate,
+                      date: effectiveAnniversaryDate,
                       description: "[SPECIAL-COUNTDOWN] [VIRTUAL]",
                       isVirtual: true
                     });
@@ -3898,7 +4006,7 @@ export default function Dashboard({ user, onSignOut, urlInviteCode }: DashboardP
                       virtualItems.push({
                         id: `virtual_${days}_days`,
                         title: `${days} Days Together Landmark ${emoji}`,
-                        date: addDaysStr(profile.anniversaryDate, days),
+                        date: addDaysStr(effectiveAnniversaryDate, days),
                         description: "[SPECIAL-COUNTDOWN] [ONE-TIME] [VIRTUAL]",
                         isVirtual: true
                       });
@@ -4145,9 +4253,9 @@ export default function Dashboard({ user, onSignOut, urlInviteCode }: DashboardP
                             <span className="text-[11px] text-slate-400 font-semibold tracking-wide block">
                               {fmtDisplayDate(item.date)}
                             </span>
-                            {profile?.anniversaryDate && (() => {
+                            {effectiveAnniversaryDate && (() => {
                               try {
-                                const startObj = new Date(profile.anniversaryDate);
+                                const startObj = new Date(effectiveAnniversaryDate);
                                 startObj.setHours(0,0,0,0);
                                 const eventObj = new Date(item.date);
                                 eventObj.setHours(0,0,0,0);
@@ -4345,7 +4453,7 @@ export default function Dashboard({ user, onSignOut, urlInviteCode }: DashboardP
                   </div>
 
                   {/* Relationship Anniversary */}
-                  {profile?.anniversaryDate && (
+                  {effectiveAnniversaryDate && (
                     <div className={`p-4 rounded-2xl border transition-all flex items-center justify-between ${
                       (profile?.activeCountdownId || localPinnedId) === 'relationship_anniversary'
                         ? 'bg-pink-50/40 border-pink-200 shadow-xs'
@@ -4359,7 +4467,7 @@ export default function Dashboard({ user, onSignOut, urlInviteCode }: DashboardP
                           )}
                         </div>
                         <p className="text-slate-500 text-[10px] leading-none">
-                          Started on: {profile.anniversaryDate} ({formatDaysLeft(getDaysLeft(profile.anniversaryDate))})
+                          Started on: {effectiveAnniversaryDate} ({formatDaysLeft(getDaysLeft(effectiveAnniversaryDate))})
                         </p>
                       </div>
                       {(profile?.activeCountdownId || localPinnedId) !== 'relationship_anniversary' && (
@@ -4374,8 +4482,8 @@ export default function Dashboard({ user, onSignOut, urlInviteCode }: DashboardP
                   )}
 
                   {/* Days Together Milestone Tracker Option in Popup */}
-                  {profile?.anniversaryDate && (() => {
-                    const start = new Date(profile.anniversaryDate);
+                  {effectiveAnniversaryDate && (() => {
+                    const start = new Date(effectiveAnniversaryDate);
                     start.setHours(0, 0, 0, 0);
                     const todayClean = new Date();
                     todayClean.setHours(0, 0, 0, 0);
@@ -4681,6 +4789,24 @@ export default function Dashboard({ user, onSignOut, urlInviteCode }: DashboardP
                 </div>
               </div>
 
+              {/* Connected and Visited Status Center */}
+              <div className="p-4 bg-slate-50 border border-slate-200/60 rounded-2xl space-y-3">
+                <h4 className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Your Active Session Details</h4>
+                <div className="grid grid-cols-2 gap-3 text-[11px]">
+                  <div>
+                    <span className="text-slate-400 block text-[9px] uppercase font-semibold">Your Display Name</span>
+                    <strong className="text-slate-800 text-xs truncate block">{profile?.name || user.displayName || "Cozy Partner"}</strong>
+                  </div>
+                  <div>
+                    <span className="text-slate-400 block text-[9px] uppercase font-semibold">Your Session Activity</span>
+                    <span className="text-slate-800 text-xs font-bold flex items-center gap-1">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                      Active (Just Now)
+                    </span>
+                  </div>
+                </div>
+              </div>
+
               {/* Profile setup fields */}
               <form onSubmit={handleSaveProfile} className="space-y-4">
                 {profileError && (
@@ -4805,21 +4931,39 @@ export default function Dashboard({ user, onSignOut, urlInviteCode }: DashboardP
                     </div>
                   </form>
                 ) : (
-                  <div className="space-y-2">
-                    <div className="p-3 bg-emerald-50 rounded-xl border border-emerald-100 text-[11.5px] font-semibold text-emerald-850 flex items-center justify-between">
-                      <div>
-                        <span className="block text-emerald-600 text-[10px]">🟢 Connected Partner:</span>
-                        <strong>{profile?.partnerName || "Partner"}</strong>
-                        <span className="block text-[8.5px] text-emerald-600/70">ID: {profile?.connectedPartnerId.substring(0, 8)}...</span>
+                  <div className="space-y-3">
+                    <div className="p-4 bg-emerald-50/75 rounded-2xl border border-emerald-100/80 space-y-3">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <span className="block text-emerald-600 text-[9px] uppercase font-bold tracking-wider">Connected Partner</span>
+                          <strong className="text-sm text-slate-800">{profile?.partnerName || "Your Partner"}</strong>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={handleDisconnectPartner}
+                          className="px-2.5 py-1.5 bg-rose-50 hover:bg-rose-100 border border-rose-100 text-rose-600 font-extrabold rounded-xl text-[10px] transition cursor-pointer"
+                          title="Unlink and disconnect from partner"
+                        >
+                          Disconnect
+                        </button>
                       </div>
-                      <button
-                        type="button"
-                        onClick={handleDisconnectPartner}
-                        className="px-2.5 py-1.5 bg-rose-50 hover:bg-rose-100 border border-rose-200 text-rose-600 font-black rounded-lg text-[10px] transition cursor-pointer"
-                        title="Unlink and disconnect from partner"
-                      >
-                        Disconnect
-                      </button>
+                      
+                      {/* Detailed Connection and visited info */}
+                      <div className="pt-2 border-t border-emerald-100/60 grid grid-cols-2 gap-2 text-[10.5px]">
+                        <div>
+                          <span className="text-slate-400 block font-bold uppercase text-[8px] tracking-wider">Email Address</span>
+                          <span className="text-slate-700 font-semibold truncate block" title={profile?.partnerEmail || "No Email"}>
+                            {profile?.partnerEmail || "N/A"}
+                          </span>
+                        </div>
+                        <div>
+                          <span className="text-slate-400 block font-bold uppercase text-[8px] tracking-wider">Last Visited</span>
+                          <span className="text-emerald-700 font-extrabold flex items-center gap-1">
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                            {formatFriendlyActiveStatus(partnerProfile?.lastVisitedAt)}
+                          </span>
+                        </div>
+                      </div>
                     </div>
                   </div>
                 )}

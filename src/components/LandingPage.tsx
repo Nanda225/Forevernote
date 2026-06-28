@@ -1245,8 +1245,11 @@ export default function LandingPage({
       <footer className="py-8 text-center text-[11px] text-slate-400 font-sans tracking-wide z-10 max-w-7xl mx-auto w-full border-t border-slate-200/50 mt-12 bg-white/10 space-y-2">
         <p className="mb-1">© 2026 ForeverNote. Created to preserve your core emotions and special moments securely.</p>
         <p className="text-slate-400 font-medium">Equipped with automatic milestone reminders &amp; heart-to-heart expressive composition styles.</p>
-        <div className="pt-2 border-t border-slate-200/20 max-w-xs mx-auto text-[10px] text-slate-400 font-mono tracking-widest uppercase">
-          Designed &amp; Developed by <span className="text-pink-500 font-extrabold font-sans">KNK</span>
+        <div className="pt-2 border-t border-slate-200/20 max-w-xs mx-auto text-[10px] text-slate-400 font-mono tracking-widest uppercase space-y-1.5">
+          <div>Designed &amp; Developed by <span className="text-pink-500 font-extrabold font-sans">KNK</span></div>
+          <div className="text-[9px] text-slate-400 font-sans tracking-wider normal-case">
+            Content &amp; Concept by <span className="text-pink-500 font-extrabold">SKS</span>
+          </div>
         </div>
       </footer>
     </div>
