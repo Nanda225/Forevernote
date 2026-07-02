@@ -2,6 +2,7 @@ import { initializeApp } from 'firebase/app';
 import { getAuth, GoogleAuthProvider, signInWithPopup } from 'firebase/auth';
 import { initializeFirestore } from 'firebase/firestore';
 import firebaseConfig from '../firebase-applet-config.json';
+import { secureStorage } from './utils/secureStorage';
 
 import { 
   collection as fsCollection,
@@ -96,9 +97,9 @@ export function setVirtualSession(active: boolean, user: any = null) {
   isVirtualSessionActive = active;
   virtualUserObj = user;
   if (active && user) {
-    localStorage.setItem("fn_virtual_user", JSON.stringify(user));
+    secureStorage.setItem("fn_virtual_user", user);
   } else {
-    localStorage.removeItem("fn_virtual_user");
+    secureStorage.removeItem("fn_virtual_user");
   }
   // Dispatch dynamic update event so listeners know the auth status has changed
   window.dispatchEvent(new CustomEvent('fn_auth_changed'));
@@ -106,14 +107,9 @@ export function setVirtualSession(active: boolean, user: any = null) {
 
 export function getVirtualUser() {
   if (!virtualUserObj) {
-    const saved = localStorage.getItem("fn_virtual_user");
-    if (saved) {
-      try {
-        virtualUserObj = JSON.parse(saved);
-        isVirtualSessionActive = true;
-      } catch (e) {
-        // ignore invalid JSON
-      }
+    virtualUserObj = secureStorage.getJSON("fn_virtual_user");
+    if (virtualUserObj) {
+      isVirtualSessionActive = true;
     }
   }
   return virtualUserObj;
@@ -186,8 +182,7 @@ export function where(fieldPath: string, opStr: any, value: any): any {
 export async function getDoc(docRef: any): Promise<any> {
   if (docRef?.isVirtual) {
     const key = `fn_vdb_${docRef.path}`;
-    const raw = localStorage.getItem(key);
-    const data = raw ? JSON.parse(raw) : null;
+    const data = secureStorage.getJSON(key);
     return {
       exists: () => data !== null,
       id: docRef.id,
@@ -209,14 +204,13 @@ export async function setDoc(docRef: any, data: any): Promise<any> {
       return v;
     }));
     
-    localStorage.setItem(key, JSON.stringify(cleanData));
+    secureStorage.setItem(key, cleanData);
     
     const listKey = `fn_vdb_list_${docRef.collectionPath}`;
-    const listRaw = localStorage.getItem(listKey);
-    const list = listRaw ? JSON.parse(listRaw) : [];
+    const list = secureStorage.getJSON<string[]>(listKey) || [];
     if (!list.includes(docRef.id)) {
       list.push(docRef.id);
-      localStorage.setItem(listKey, JSON.stringify(list));
+      secureStorage.setItem(listKey, list);
     }
     
     window.dispatchEvent(new CustomEvent('fn_vdb_update', { detail: { path: docRef.path } }));
@@ -229,8 +223,7 @@ export async function setDoc(docRef: any, data: any): Promise<any> {
 export async function updateDoc(docRef: any, data: any): Promise<any> {
   if (docRef?.isVirtual) {
     const key = `fn_vdb_${docRef.path}`;
-    const raw = localStorage.getItem(key);
-    const existing = raw ? JSON.parse(raw) : {};
+    const existing = secureStorage.getJSON(key) || {};
     
     const cleanData = JSON.parse(JSON.stringify(data, (k, v) => {
       if (v && typeof v === 'object' && (v._methodName === 'serverTimestamp' || v.isServerTimestamp)) {
@@ -240,14 +233,13 @@ export async function updateDoc(docRef: any, data: any): Promise<any> {
     }));
     
     const merged = { ...existing, ...cleanData };
-    localStorage.setItem(key, JSON.stringify(merged));
+    secureStorage.setItem(key, merged);
     
     const listKey = `fn_vdb_list_${docRef.collectionPath}`;
-    const listRaw = localStorage.getItem(listKey);
-    const list = listRaw ? JSON.parse(listRaw) : [];
+    const list = secureStorage.getJSON<string[]>(listKey) || [];
     if (!list.includes(docRef.id)) {
       list.push(docRef.id);
-      localStorage.setItem(listKey, JSON.stringify(list));
+      secureStorage.setItem(listKey, list);
     }
     
     window.dispatchEvent(new CustomEvent('fn_vdb_update', { detail: { path: docRef.path } }));
@@ -260,13 +252,12 @@ export async function updateDoc(docRef: any, data: any): Promise<any> {
 export async function deleteDoc(docRef: any): Promise<any> {
   if (docRef?.isVirtual) {
     const key = `fn_vdb_${docRef.path}`;
-    localStorage.removeItem(key);
+    secureStorage.removeItem(key);
     
     const listKey = `fn_vdb_list_${docRef.collectionPath}`;
-    const listRaw = localStorage.getItem(listKey);
-    let list = listRaw ? JSON.parse(listRaw) : [];
+    let list = secureStorage.getJSON<string[]>(listKey) || [];
     list = list.filter((id: string) => id !== docRef.id);
-    localStorage.setItem(listKey, JSON.stringify(list));
+    secureStorage.setItem(listKey, list);
     
     window.dispatchEvent(new CustomEvent('fn_vdb_update', { detail: { path: docRef.path } }));
     return;
@@ -279,15 +270,13 @@ export async function getDocs(queryObj: any): Promise<any> {
   if (queryObj?.isVirtual) {
     const collectionPath = queryObj.ref?.path || queryObj.path;
     const listKey = `fn_vdb_list_${collectionPath}`;
-    const listRaw = localStorage.getItem(listKey);
-    const list = listRaw ? JSON.parse(listRaw) : [];
+    const list = secureStorage.getJSON<string[]>(listKey) || [];
     
     const docsList: any[] = [];
     for (const id of list) {
       const key = `fn_vdb_${collectionPath}/${id}`;
-      const raw = localStorage.getItem(key);
-      if (raw) {
-        const data = JSON.parse(raw);
+      const data = secureStorage.getJSON(key);
+      if (data) {
         docsList.push({
           id,
           ref: { id, path: `${collectionPath}/${id}` },

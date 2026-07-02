@@ -4,6 +4,16 @@ import fs from "fs";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI } from "@google/genai";
 import dotenv from "dotenv";
+import helmet from "helmet";
+import rateLimit from "express-rate-limit";
+import { 
+  validatePromptInput, 
+  sanitizePromptString, 
+  validateTitle, 
+  validateInviteCode, 
+  sanitizeName, 
+  validateRequestSize 
+} from "./validation.js";
 
 dotenv.config();
 
@@ -88,7 +98,7 @@ async function generateContentWithRetry(prompt: string): Promise<string> {
 
 async function startServer() {
   const app = express();
-  const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
+  const PORT = 3000;
 
   // Enable trust proxy for correct client IP detection behind Cloud Run reverse proxies
   app.enable("trust proxy");
@@ -98,24 +108,151 @@ async function startServer() {
 
   app.use(express.json());
 
+  // 1. CORS Configuration with explicit white-listing
+  const allowedOrigins = [
+    "https://ais-dev-zurcbszlpln6mxvjm5ngqx-306030133164.asia-southeast1.run.app",
+    "https://ais-pre-zurcbszlpln6mxvjm5ngqx-306030133164.asia-southeast1.run.app",
+    "http://localhost:3000"
+  ];
+  app.use((req, res, next) => {
+    const origin = req.headers.origin;
+    if (origin && allowedOrigins.includes(origin)) {
+      res.setHeader("Access-Control-Allow-Origin", origin);
+    } else {
+      res.setHeader("Access-Control-Allow-Origin", allowedOrigins[0]);
+    }
+    res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization,X-Requested-With,X-CSRF-Token");
+    res.setHeader("Access-Control-Allow-Credentials", "true");
+    if (req.method === "OPTIONS") {
+      return res.sendStatus(200);
+    }
+    next();
+  });
+
+  // 2. HTTPS enforcement in production
+  app.use((req, res, next) => {
+    if (process.env.NODE_ENV === "production" && req.headers["x-forwarded-proto"] !== "https") {
+      return res.redirect(`https://${req.headers.host}${req.url}`);
+    }
+    next();
+  });
+
+  // 3. Helmet middleware with custom Content Security Policy and HSTS
+  app.use(helmet({
+    contentSecurityPolicy: {
+      directives: {
+        defaultSrc: ["'self'"],
+        scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'", "https://apis.google.com", "https://*.googleapis.com"],
+        styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
+        imgSrc: ["'self'", "data:", "https://images.unsplash.com", "https://lh3.googleusercontent.com"],
+        connectSrc: [
+          "'self'", 
+          "https://identitytoolkit.googleapis.com", 
+          "https://securetoken.googleapis.com", 
+          "https://firestore.googleapis.com",
+          "https://*.googleapis.com",
+          "https://ais-dev-zurcbszlpln6mxvjm5ngqx-306030133164.asia-southeast1.run.app",
+          "https://ais-pre-zurcbszlpln6mxvjm5ngqx-306030133164.asia-southeast1.run.app"
+        ],
+        fontSrc: ["'self'", "https://fonts.gstatic.com"],
+        objectSrc: ["'none'"],
+        frameAncestors: ["'self'", "https://ai.studio", "https://*.google.com", "https://*.run.app"],
+        upgradeInsecureRequests: [],
+      },
+    },
+    crossOriginEmbedderPolicy: false,
+    hsts: {
+      maxAge: 31536000,
+      includeSubDomains: true,
+      preload: true
+    }
+  }));
+
+  // 4. Anti-CSRF verification middleware for state-changing endpoints
+  app.use((req, res, next) => {
+    if (["POST", "PUT", "DELETE", "PATCH"].includes(req.method)) {
+      const origin = req.headers.origin;
+      const referer = req.headers.referer;
+      const allowedHosts = [
+        "ais-dev-zurcbszlpln6mxvjm5ngqx-306030133164.asia-southeast1.run.app",
+        "ais-pre-zurcbszlpln6mxvjm5ngqx-306030133164.asia-southeast1.run.app",
+        "localhost:3000"
+      ];
+      
+      let originHost = "";
+      if (origin) {
+        try {
+          originHost = new URL(origin).host;
+        } catch (e) {}
+      }
+      let refererHost = "";
+      if (referer) {
+        try {
+          refererHost = new URL(referer).host;
+        } catch (e) {}
+      }
+
+      const isValidOrigin = originHost && allowedHosts.includes(originHost);
+      const isValidReferer = refererHost && allowedHosts.includes(refererHost);
+
+      if (!isValidOrigin && !isValidReferer && process.env.NODE_ENV === "production") {
+        return res.status(403).json({ error: "CSRF verification failed: invalid request source" });
+      }
+    }
+    next();
+  });
+
+  // 5. Rate limiting for AI and input-intensive endpoints
+  const aiRateLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 30, // Limit each IP to 30 requests per windowMs
+    message: { error: "Too many requests from this IP, please try again after 15 minutes." },
+    standardHeaders: true,
+    legacyHeaders: false,
+  });
+
   // Health check endpoint for Cloud Run and external monitoring status verification
   app.get("/api/health", (req, res) => {
     res.status(200).json({ status: "healthy", timestamp: new Date().toISOString() });
   });
 
   // API Route for Letter Generation
-  app.post("/api/letter/generate", async (req, res) => {
+  app.post("/api/letter/generate", aiRateLimiter, async (req, res) => {
+    const sizeCheck = validateRequestSize(req.body);
+    if (!sizeCheck.isValid) {
+      return res.status(400).json({ error: sizeCheck.error });
+    }
+
     const { title, type, date, description, style, userName, partnerName } = req.body;
     try {
-
       if (!title || !type || !description) {
         return res.status(400).json({ error: "Title, type, and description are required fields" });
       }
 
-      const prompt = `Write a deeply personalized relationship milestone greeting/letter from ${userName || 'me'} to their ${partnerName ? `partner ${partnerName}` : 'friend/partner'} celebrating the milestone "${title}" (Type: ${type}, Date: ${date || 'special day'}).
-      Here is the story/description of what happened: "${description}".
+      // Input Validation & Sanitation
+      const titleCheck = validateTitle(title);
+      if (!titleCheck.isValid) {
+        return res.status(400).json({ error: `Invalid Title: ${titleCheck.error}` });
+      }
+
+      const descCheck = validatePromptInput(description);
+      if (!descCheck.isValid) {
+        return res.status(400).json({ error: `Invalid Description: ${descCheck.error}` });
+      }
+
+      const cleanUserName = sanitizeName(userName);
+      const cleanPartnerName = sanitizeName(partnerName);
+      const cleanTitle = sanitizePromptString(title);
+      const cleanType = sanitizePromptString(type);
+      const cleanDate = sanitizePromptString(date || 'special day');
+      const cleanStyle = sanitizePromptString(style || 'Romantic');
+      const cleanDescription = sanitizePromptString(description);
+
+      const prompt = `Write a deeply personalized relationship milestone greeting/letter from ${cleanUserName} to their partner ${cleanPartnerName} celebrating the milestone "${cleanTitle}" (Type: ${cleanType}, Date: ${cleanDate}).
+      Here is the story/description of what happened: "${cleanDescription}".
       
-      Generate it in a style that is ${style || 'Romantic'}.
+      Generate it in a style that is ${cleanStyle}.
       
       Requirements:
       1. Write it as a heartfelt, organic letter, addressed from ${userName || 'me'} to ${partnerName || 'my favorite person'}.
@@ -197,24 +334,45 @@ ${uName}`;
   });
 
   // API Route for Creative Storyteller Refinement
-  app.post("/api/storyteller/refine", async (req, res) => {
+  app.post("/api/storyteller/refine", aiRateLimiter, async (req, res) => {
+    const sizeCheck = validateRequestSize(req.body);
+    if (!sizeCheck.isValid) {
+      return res.status(400).json({ error: sizeCheck.error });
+    }
+
     const { title, content, voice, userName, partnerName } = req.body;
     try {
-
       if (!title || !content || !voice) {
         return res.status(400).json({ error: "Title, content, and narrative voice are required" });
       }
 
+      // Input Validation & Sanitation
+      const titleCheck = validateTitle(title);
+      if (!titleCheck.isValid) {
+        return res.status(400).json({ error: `Invalid Title: ${titleCheck.error}` });
+      }
+
+      const contentCheck = validatePromptInput(content);
+      if (!contentCheck.isValid) {
+        return res.status(400).json({ error: `Invalid Content: ${contentCheck.error}` });
+      }
+
+      const cleanUserName = sanitizeName(userName);
+      const cleanPartnerName = sanitizeName(partnerName);
+      const cleanTitle = sanitizePromptString(title);
+      const cleanVoice = sanitizePromptString(voice || 'Bard of Love');
+      const cleanContent = sanitizePromptString(content);
+
       const prompt = `You are the master resident Storyteller inside the ForeverNote relationship scrapbook.
 Your role is to take raw draft journal entries, notes, or memories written by a user and elevate them into a stunning, emotionally rich, literary narrative.
 
-Narrator: ${userName || 'Me'}
-Written for/about: ${partnerName || 'my favorite human'}
-Title: "${title}"
-Selected Literary Style: ${voice || 'Bard of Love'}
+Narrator: ${cleanUserName}
+Written for/about: ${cleanPartnerName}
+Title: "${cleanTitle}"
+Selected Literary Style: ${cleanVoice}
 
 Raw Draft Entry:
-"${content}"
+"${cleanContent}"
 
 Please craft the refined story according to the following guidelines:
 1. Maintain the soul, facts, and emotional Core of the user's raw entry, but use exquisite vocabulary, flow, and visual imagery.
@@ -255,18 +413,32 @@ ${content}
   });
 
   // API Route for Simulated Partner message replies via Gemini
-  app.post("/api/chat/reply", async (req, res) => {
+  app.post("/api/chat/reply", aiRateLimiter, async (req, res) => {
+    const sizeCheck = validateRequestSize(req.body);
+    if (!sizeCheck.isValid) {
+      return res.status(400).json({ error: sizeCheck.error });
+    }
+
     const { messageText, style, userName } = req.body;
     try {
-
       if (!messageText) {
         return res.status(400).json({ error: "Message text is required" });
       }
 
+      // Input Validation & Sanitation
+      const msgCheck = validatePromptInput(messageText);
+      if (!msgCheck.isValid) {
+        return res.status(400).json({ error: `Invalid Message: ${msgCheck.error}` });
+      }
+
+      const cleanUserName = sanitizeName(userName);
+      const cleanStyle = sanitizePromptString(style || 'cute');
+      const cleanMessageText = sanitizePromptString(messageText);
+
       const prompt = `You are Liam, a deeply loving, supportive, and playful romantic partner. 
-      Your special person ${userName ? userName : 'my dearest'} just sent you this private message in our cozy space: "${messageText}".
+      Your special person ${cleanUserName} just sent you this private message in our cozy space: "${cleanMessageText}".
       
-      Please reply to them in a way that matches the style style "${style || 'cute'}".
+      Please reply to them in a way that matches the style style "${cleanStyle}".
       
       Requirements:
       1. Write a short, highly conversational response (1-2 short sentences maximum).
@@ -311,16 +483,38 @@ ${content}
   });
 
   // API Route for Generating Heartfelt Invitation Letters with handwritten formatting & custom email template designs
-  app.post("/api/invite/generate", async (req, res) => {
-    const { senderName, nickname, inviteCode, vibe, highlights, designTemplate, appUrl } = req.body;
-    try {
+  app.post("/api/invite/generate", aiRateLimiter, async (req, res) => {
+    const sizeCheck = validateRequestSize(req.body);
+    if (!sizeCheck.isValid) {
+      return res.status(400).json({ error: sizeCheck.error });
+    }
 
+    const { senderName, nickname, inviteCode, vibe, highlights, designTemplate, appUrl } = req.body;
+
+    const cleanSenderName = sanitizeName(senderName);
+    const cleanNickname = sanitizeName(nickname);
+    const cleanInviteCode = sanitizePromptString(inviteCode || '');
+    const cleanVibe = sanitizePromptString(vibe || 'romantic');
+    const cleanDesignTemplate = sanitizePromptString(designTemplate || 'classic');
+    const cleanAppUrl = sanitizePromptString(appUrl || 'https://ai.studio/build');
+
+    try {
       if (!inviteCode) {
         return res.status(400).json({ error: "Invite code is required to generate the invitation letter" });
       }
 
-      const selectedTemplate = (designTemplate as string) || "classic";
-      const targetUrl = appUrl || "https://ai.studio/build";
+      // Input Validation & Sanitation
+      const codeCheck = validateInviteCode(inviteCode);
+      if (!codeCheck.isValid) {
+        return res.status(400).json({ error: `Invalid Invite Code: ${codeCheck.error}` });
+      }
+
+      const safeHighlights = Array.isArray(highlights)
+        ? highlights.map(h => sanitizePromptString(String(h)))
+        : [];
+
+      const selectedTemplate = cleanDesignTemplate;
+      const targetUrl = cleanAppUrl;
 
       const vibeDesc = {
         "romantic": "deeply romantic, filled with warm emotional butterflies and poetic whispers",
@@ -328,14 +522,14 @@ ${content}
         "cute": "cute, sweet, adorable, simple, extremely heartwarming and warm",
         "nostalgic": "sentimental, nostalgic, looking back on beautiful memories and look forward to capturing forever",
         "mysterious": "cozily mysterious, playful teaser, suggesting a special undercover digital lounge"
-      }[vibe as string] || "heartwarming, excited, and coziest handwriting style";
+      }[cleanVibe] || "heartwarming, excited, and coziest handwriting style";
 
-      const highlightsList = (highlights as string[])?.length > 0 
-        ? highlights.join(", ") 
+      const highlightsList = safeHighlights.length > 0 
+        ? safeHighlights.join(", ") 
         : "private milestones, secure secret messages, sweet countdown reminders, and a shared space";
 
       const prompt = `You are a legendary relationship visual designer and master emotional calligrapher helping someone invite their loved one to a private digital couple's sanctuary called ForeverNote.
-Write an exceptionally beautiful, engaging, and exciting invitation from ${senderName || 'Me'} to their dearest ${nickname || 'favorite person'}.
+Write an exceptionally beautiful, engaging, and exciting invitation from ${cleanSenderName} to their dearest ${cleanNickname}.
 
 We want this invitation to feel extremely interesting, creative, and utterly distinct from a standard boring email!
 
@@ -390,7 +584,7 @@ Template Guide specs:
             <h2 style="color: #db2777; margin-bottom: 8px;">💖 ForeverNote Invitation 💖</h2>
             <p style="font-size: 14px; color: #4b5563; line-height: 1.6;">${responseText.replace(/\n/g, '<br>')}</p>
             <div style="background-color: #fff; padding: 12px; border-radius: 12px; border: 1px solid #ffd1dc; margin: 15px auto; display: inline-block; font-weight: bold; font-size: 16px; color: #db2777;">
-              Invite Code: ${inviteCode}
+              Invite Code: ${cleanInviteCode}
             </div>
           </div>`
         });
@@ -398,10 +592,10 @@ Template Guide specs:
     } catch (error: any) {
       console.warn("Invitation letter used local fallback:", error);
       
-      const sName = senderName || "Your loved one";
-      const pName = nickname || "My favorite person";
-      const code = inviteCode;
-      const targetUrl = appUrl || "https://ai.studio/build";
+      const sName = cleanSenderName || "Your loved one";
+      const pName = cleanNickname || "My favorite person";
+      const code = cleanInviteCode;
+      const targetUrl = cleanAppUrl;
       
       const letterText = `💌 COZY INVITATION TO OUR SHARED SANCTUARY 💌
 
@@ -486,11 +680,13 @@ ${sName}`;
   const distPath = rootDir.endsWith("dist") ? rootDir : path.join(rootDir, "dist");
   const hasBuildAssets = fs.existsSync(path.join(distPath, 'index.html'));
   
-  // We are in production if NODE_ENV is "production",
-  // or if built assets exist and we are not in the AI Studio local dev workspace (which sets DISABLE_HMR=true).
+  // We are in production if we are running the compiled/bundled production script,
+  // or if built assets exist, NODE_ENV is "production", and we are not in the AI Studio local dev workspace (which sets DISABLE_HMR=true).
+  // If build assets do not exist, we MUST use Vite development mode to prevent "Page not found" / 404 errors.
+  const isRunningProductionBundle = !!(process.argv[1] && (process.argv[1].endsWith("server.cjs") || process.argv[1].includes("dist")));
   const isProduction = 
-    process.env.NODE_ENV === "production" || 
-    (hasBuildAssets && process.env.DISABLE_HMR !== "true");
+    isRunningProductionBundle || 
+    (hasBuildAssets && process.env.NODE_ENV === "production" && process.env.DISABLE_HMR !== "true");
 
   console.log(`[Server Initialization] Paths: rootDir=${rootDir}, distPath=${distPath}, hasBuildAssets=${hasBuildAssets}, DISABLE_HMR=${process.env.DISABLE_HMR}, NODE_ENV=${process.env.NODE_ENV} -> isProduction=${isProduction}`);
 

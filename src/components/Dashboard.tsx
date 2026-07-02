@@ -67,6 +67,96 @@ const GLOBAL_SPECIAL_DAYS = [
   { id: "global_newyears", title: "New Year's Eve 🎆", month: 11, day: 31 } // Dec 31
 ];
 
+interface ThemeStyles {
+  primaryBg: string;
+  primaryHoverBg: string;
+  textAccent: string;
+  badgeAccent: string;
+  iconBg: string;
+  iconText: string;
+  borderAccent: string;
+  navBg: string;
+  bodyBg: string;
+  logoColor: string;
+  isDark?: boolean;
+}
+
+const THEMES: Record<string, ThemeStyles> = {
+  rose: {
+    primaryBg: "bg-pink-600",
+    primaryHoverBg: "hover:bg-pink-700",
+    textAccent: "text-pink-600",
+    badgeAccent: "bg-pink-100 text-pink-600",
+    iconBg: "bg-pink-500",
+    iconText: "text-pink-500",
+    borderAccent: "border-rose-100",
+    navBg: "bg-white/90",
+    bodyBg: "bg-linear-to-b from-[#FDFBF7] via-[#FFF8F9] to-[#F1F7FB]",
+    logoColor: "text-pink-500"
+  },
+  slate: {
+    primaryBg: "bg-slate-800",
+    primaryHoverBg: "hover:bg-slate-900",
+    textAccent: "text-slate-800",
+    badgeAccent: "bg-slate-100 text-slate-850",
+    iconBg: "bg-slate-850",
+    iconText: "text-slate-850",
+    borderAccent: "border-slate-200",
+    navBg: "bg-white/90",
+    bodyBg: "bg-linear-to-b from-[#F8FAFC] via-[#F1F5F9] to-[#E2E8F0]",
+    logoColor: "text-slate-850"
+  },
+  amber: {
+    primaryBg: "bg-amber-500",
+    primaryHoverBg: "hover:bg-amber-600",
+    textAccent: "text-amber-600",
+    badgeAccent: "bg-amber-100 text-amber-700",
+    iconBg: "bg-amber-500",
+    iconText: "text-amber-500",
+    borderAccent: "border-amber-200",
+    navBg: "bg-white/90",
+    bodyBg: "bg-linear-to-b from-[#FFFDF5] via-[#FFFDF0] to-[#FEFBF0]",
+    logoColor: "text-amber-500"
+  },
+  lavender: {
+    primaryBg: "bg-violet-600",
+    primaryHoverBg: "hover:bg-violet-700",
+    textAccent: "text-violet-600",
+    badgeAccent: "bg-violet-100 text-violet-700",
+    iconBg: "bg-violet-500",
+    iconText: "text-violet-500",
+    borderAccent: "border-violet-150",
+    navBg: "bg-white/90",
+    bodyBg: "bg-linear-to-b from-[#FAF5FF] via-[#F3E8FF] to-[#E9D5FF]",
+    logoColor: "text-violet-500"
+  },
+  emerald: {
+    primaryBg: "bg-emerald-600",
+    primaryHoverBg: "hover:bg-emerald-700",
+    textAccent: "text-emerald-600",
+    badgeAccent: "bg-emerald-100 text-emerald-700",
+    iconBg: "bg-emerald-500",
+    iconText: "text-emerald-500",
+    borderAccent: "border-emerald-200",
+    navBg: "bg-white/90",
+    bodyBg: "bg-linear-to-b from-[#F0FDF4] via-[#DCFCE7] to-[#BBF7D0]",
+    logoColor: "text-emerald-500"
+  },
+  midnight: {
+    primaryBg: "bg-indigo-600",
+    primaryHoverBg: "hover:bg-indigo-700",
+    textAccent: "text-indigo-400",
+    badgeAccent: "bg-indigo-950/80 text-indigo-300",
+    iconBg: "bg-indigo-600",
+    iconText: "text-indigo-400",
+    borderAccent: "border-indigo-900/60",
+    navBg: "bg-slate-900/90",
+    bodyBg: "bg-linear-to-b from-[#090D1A] via-[#0F172A] to-[#1D243B]",
+    logoColor: "text-indigo-400",
+    isDark: true
+  }
+};
+
 interface DashboardProps {
   user: any; // Firebase user credential
   onSignOut: () => void;
@@ -81,6 +171,7 @@ export default function Dashboard({ user, onSignOut, urlInviteCode }: DashboardP
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [partnerProfile, setPartnerProfile] = useState<any>(null);
   const [milestones, setMilestones] = useState<Milestone[]>([]);
+  const [hasMilestonesLoaded, setHasMilestonesLoaded] = useState(false);
   const [reminders, setReminders] = useState<Reminder[]>([]);
   
   // Dual streams to fetch secret love messages safely without rules failure
@@ -105,6 +196,8 @@ export default function Dashboard({ user, onSignOut, urlInviteCode }: DashboardP
   const [profPartnerName, setProfPartnerName] = useState("");
   const [profPartnerEmail, setProfPartnerEmail] = useState("");
   const [profAnniversary, setProfAnniversary] = useState("");
+  const [editFriendshipMode, setEditFriendshipMode] = useState<boolean>(false);
+  const [editAppearanceTheme, setEditAppearanceTheme] = useState<string>("rose");
   const [profileSaving, setProfileSaving] = useState(false);
   const [profileError, setProfileError] = useState("");
 
@@ -117,6 +210,29 @@ export default function Dashboard({ user, onSignOut, urlInviteCode }: DashboardP
 
   // Shared/synced romantic anniversary date across the pair
   const effectiveAnniversaryDate = profile?.anniversaryDate || partnerProfile?.anniversaryDate || "";
+
+  const currentTheme = profile?.appearanceTheme || "rose";
+  const isFriendshipMode = profile?.friendshipMode || false;
+  const themeStyles = useMemo(() => THEMES[currentTheme] || THEMES.rose, [currentTheme]);
+
+  const renderLogoIcon = () => {
+    const iconClass = "w-5 h-5 fill-white";
+    if (isFriendshipMode) {
+      return <Smile className="w-5 h-5" />;
+    }
+    switch (currentTheme) {
+      case "slate":
+        return <Compass className="w-5 h-5" />;
+      case "lavender":
+        return <Sparkles className="w-5 h-5" />;
+      case "emerald":
+        return <Compass className="w-5 h-5" />;
+      case "midnight":
+        return <Clock className="w-5 h-5" />;
+      default:
+        return <Heart className={iconClass} />;
+    }
+  };
 
   // Auto-fill form field with effective anniversary once loaded/synced
   useEffect(() => {
@@ -278,6 +394,215 @@ export default function Dashboard({ user, onSignOut, urlInviteCode }: DashboardP
 
   const [notification, setNotification] = useState<{ type: "success" | "error" | "info"; message: string } | null>(null);
 
+  // India DPDP Act, 2023 Compliance States
+  const [privacyConsent, setPrivacyConsent] = useState(true);
+  const [dpdpLanguage, setDpdpLanguage] = useState<'en' | 'hi'>('en');
+  const [isEraseProcessing, setIsEraseProcessing] = useState(false);
+
+  // Private Visitor Counter states
+  const [globalGuestVisits, setGlobalGuestVisits] = useState<number>(0);
+  const [myGuestVisits, setMyGuestVisits] = useState<number>(0);
+
+  useEffect(() => {
+    let localVisits = 0;
+    try {
+      const stored = localStorage.getItem("fn_guest_visits");
+      localVisits = stored ? parseInt(stored, 10) : 0;
+    } catch (e) {
+      console.warn("localStorage not fully accessible:", e);
+    }
+    setMyGuestVisits(localVisits);
+
+    const statsRef = doc(db, "public_stats", "visitors");
+    let unsub = () => {};
+    try {
+      unsub = onSnapshot(statsRef, (docSnap: any) => {
+        if (docSnap && docSnap.exists()) {
+          setGlobalGuestVisits(docSnap.data().count || 0);
+        }
+      }, (err: any) => {
+        console.warn("onSnapshot failed for public stats inside dashboard:", err);
+      });
+    } catch (err) {
+      console.warn("Could not listen to stats updates inside dashboard:", err);
+    }
+
+    return () => {
+      if (typeof unsub === "function") unsub();
+    };
+  }, []);
+
+  const handleToggleConsent = async (consentVal: boolean) => {
+    setPrivacyConsent(consentVal);
+    try {
+      const userRef = doc(db, "users", user.uid);
+      await updateDoc(userRef, {
+        dpdpConsentGiven: consentVal
+      });
+      if (consentVal) {
+        showNotification("success", "Consent successfully re-established under India DPDP Act, 2023! 🌸");
+      } else {
+        showNotification("info", "Consent withdrawn. Your space is now in limited DPDP protection status. ⚠️");
+      }
+    } catch (err: any) {
+      console.error(err);
+      showNotification("error", "Failed to update DPDP consent: " + err.message);
+    }
+  };
+
+  const handleEraseAllUserData = async () => {
+    if (!window.confirm("🔴 DANGER: This is a permanent, non-reversible data erasure request under Section 12 of the India Digital Personal Data Protection (DPDP) Act, 2023. This will instantly delete your account profile, all shared love letters, secret message logs, countdowns, and media gallery items forever. Are you absolutely sure you want to proceed?")) {
+      return;
+    }
+    
+    if (!window.confirm("⚠️ FINAL WARNING: Once you click OK, all your relationship scrapbook memories are gone forever and cannot be recovered. Confirm data erasure?")) {
+      return;
+    }
+
+    try {
+      setIsEraseProcessing(true);
+      showNotification("info", "Initiating complete DPDP data purge... 🗑️");
+
+      const myUid = user.uid;
+      const partnerId = profile?.connectedPartnerId;
+
+      // 1. Delete user profile document
+      const myUserRef = doc(db, "users", myUid);
+      await deleteDoc(myUserRef);
+
+      // 2. Unlink partner if paired so they are cleanly notified and not stranded
+      if (partnerId) {
+        try {
+          const partnerRef = doc(db, "users", partnerId);
+          await updateDoc(partnerRef, {
+            connectedPartnerId: "",
+            partnerEmail: "",
+            partnerInviteCode: ""
+          });
+        } catch (partnerErr) {
+          console.warn("Failed to clean up partner link during erasure:", partnerErr);
+        }
+      }
+
+      // 3. Purge milestones where userId == myUid
+      const milestonesQuery = query(collection(db, "milestones"), where("userId", "==", myUid));
+      const milestonesSnap = await getDocs(milestonesQuery);
+      for (const mDoc of milestonesSnap.docs) {
+        await deleteDoc(doc(db, "milestones", mDoc.id));
+      }
+
+      // 4. Purge reminders where userId == myUid
+      const remindersQuery = query(collection(db, "reminders"), where("userId", "==", myUid));
+      const remindersSnap = await getDocs(remindersQuery);
+      for (const rDoc of remindersSnap.docs) {
+        await deleteDoc(doc(db, "reminders", rDoc.id));
+      }
+
+      // 5. Purge secret love messages where senderId == myUid or recipientId == myUid
+      const msgsQuery1 = query(collection(db, "love_messages"), where("senderId", "==", myUid));
+      const msgsSnap1 = await getDocs(msgsQuery1);
+      for (const mDoc of msgsSnap1.docs) {
+        await deleteDoc(doc(db, "love_messages", mDoc.id));
+      }
+      const msgsQuery2 = query(collection(db, "love_messages"), where("recipientId", "==", myUid));
+      const msgsSnap2 = await getDocs(msgsQuery2);
+      for (const mDoc of msgsSnap2.docs) {
+        await deleteDoc(doc(db, "love_messages", mDoc.id));
+      }
+
+      // 6. Purge gallery items uploaded by myUid
+      const galleryQuery = query(collection(db, "gallery_items"), where("userId", "==", myUid));
+      const gallerySnap = await getDocs(galleryQuery);
+      for (const gDoc of gallerySnap.docs) {
+        await deleteDoc(doc(db, "gallery_items", gDoc.id));
+      }
+
+      // 7. Clear secure local storage
+      try {
+        localStorage.removeItem("fn_virtual_user");
+        localStorage.removeItem("fn_guest_visits");
+        localStorage.removeItem("forevernote_conn_collapsed");
+        const keys = Object.keys(localStorage);
+        for (const k of keys) {
+          if (k.startsWith("fn_vdb_") || k.startsWith("secure_storage_")) {
+            localStorage.removeItem(k);
+          }
+        }
+      } catch (localErr) {
+        console.warn("Error clearing local storage:", localErr);
+      }
+
+      showNotification("success", "Your account and all emotional scrapbook data have been permanently erased. Farewell! ❤️");
+      setIsSettingsOpen(false);
+      setTimeout(() => {
+        onSignOut();
+      }, 2500);
+
+    } catch (err: any) {
+      console.error("Purge failure:", err);
+      showNotification("error", "DPDP Erasure failed: " + err.message);
+    } finally {
+      setIsEraseProcessing(false);
+    }
+  };
+
+  const handleExportAllUserData = () => {
+    try {
+      const exportData = {
+        meta: {
+          app: "ForeverNote",
+          regulation: "Digital Personal Data Protection Act (DPDP), 2023 (India)",
+          exportedAt: new Date().toISOString(),
+          dataPrincipalEmail: user.email,
+          dataPrincipalUid: user.uid,
+          consentStatus: privacyConsent ? "ACTIVE_CONSENT_GRANTED" : "WITHDRAWN"
+        },
+        profile: {
+          displayName: profile?.name || user?.displayName || "N/A",
+          email: profile?.email || user?.email || "N/A",
+          partnerName: profile?.partnerName || "N/A",
+          partnerEmail: profile?.partnerEmail || "N/A",
+          anniversaryDate: profile?.anniversaryDate || "N/A",
+          inviteCode: profile?.inviteCode || "N/A",
+          connectedPartnerId: profile?.connectedPartnerId || "N/A"
+        },
+        milestones: milestones.map(m => ({
+          title: m.title,
+          type: m.type,
+          date: m.date,
+          description: m.description,
+          aiLetterStyle: m.aiLetterStyle || "N/A",
+          generatedLetter: m.generatedLetter || "N/A",
+          imageUrl: m.imageUrl ? "(Encrypted/Base64 Image Kept)" : "N/A",
+          createdAt: m.createdAt
+        })),
+        reminders: reminders.map(r => ({
+          deliveryType: r.deliveryType,
+          scheduledDate: r.scheduledDate,
+          status: r.status,
+          createdAt: r.createdAt
+        })),
+        love_messages: {
+          outgoing: outgoingMsgs.map(m => ({ text: m.text, style: m.style, createdAt: m.createdAt })),
+          incoming: incomingMsgs.map(m => ({ text: m.text, style: m.style, createdAt: m.createdAt }))
+        }
+      };
+
+      const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(exportData, null, 2));
+      const downloadAnchor = document.createElement('a');
+      downloadAnchor.setAttribute("href", dataStr);
+      downloadAnchor.setAttribute("download", `forevernote_dpdp_export_${user.uid}.json`);
+      document.body.appendChild(downloadAnchor);
+      downloadAnchor.click();
+      downloadAnchor.remove();
+
+      showNotification("success", "Your complete relationship data file has been compiled and downloaded successfully! 🌸");
+    } catch (err: any) {
+      console.error(err);
+      showNotification("error", "Failed to compile your data export file: " + err.message);
+    }
+  };
+
   const showNotification = (type: "success" | "error" | "info", msg: string) => {
     setNotification({ type, message: msg });
     setTimeout(() => {
@@ -316,15 +641,21 @@ export default function Dashboard({ user, onSignOut, urlInviteCode }: DashboardP
           partnerInviteCode: udata.partnerInviteCode || "",
           connectedPartnerId: udata.connectedPartnerId || "",
           activeCountdownId: udata.activeCountdownId || "auto",
+          friendshipMode: udata.friendshipMode || false,
+          appearanceTheme: udata.appearanceTheme || "rose",
           createdAt: udata.createdAt,
+          dpdpConsentGiven: udata.dpdpConsentGiven !== false,
         };
         setProfile(prof);
+        setPrivacyConsent(udata.dpdpConsentGiven !== false);
         
         // Populate inputs
         setProfName(udata.name || "");
         setProfPartnerName(udata.partnerName || "");
         setProfPartnerEmail(udata.partnerEmail || "");
         setProfAnniversary(udata.anniversaryDate || "");
+        setEditFriendshipMode(udata.friendshipMode || false);
+        setEditAppearanceTheme(udata.appearanceTheme || "rose");
       } else {
         // Auto-initialize profile document if not found, to ensure they can connect with a code
         const randomCode = "FN-" + Math.random().toString(36).substring(2, 8).toUpperCase();
@@ -337,6 +668,8 @@ export default function Dashboard({ user, onSignOut, urlInviteCode }: DashboardP
           partnerName: "",
           partnerEmail: "",
           anniversaryDate: "",
+          friendshipMode: false,
+          appearanceTheme: "rose",
           createdAt: serverTimestamp(),
         }).catch((err) => console.error("Error auto-creating profile doc:", err));
       }
@@ -375,10 +708,12 @@ export default function Dashboard({ user, onSignOut, urlInviteCode }: DashboardP
     }
   };
 
-  // 1b. Log current user's visit on mount / initial load
+  // 1b. Log current user's visit on mount / initial load (only after profile is loaded and exists)
+  const loggedVisitRef = useRef(false);
   useEffect(() => {
-    if (!user?.uid) return;
+    if (!user?.uid || !profile || loggedVisitRef.current) return;
     
+    loggedVisitRef.current = true;
     const logVisit = async () => {
       try {
         const userRef = doc(db, "users", user.uid);
@@ -392,7 +727,7 @@ export default function Dashboard({ user, onSignOut, urlInviteCode }: DashboardP
     };
     
     logVisit();
-  }, [user?.uid]);
+  }, [user?.uid, profile]);
 
   // 1c. Partner Profile Subscription (retrieves real-time visited and details)
   useEffect(() => {
@@ -547,8 +882,10 @@ export default function Dashboard({ user, onSignOut, urlInviteCode }: DashboardP
         return tB - tA;
       });
       setMilestones(list);
+      setHasMilestonesLoaded(true);
     }, (err) => {
       console.error("Milestones read error:", err);
+      setHasMilestonesLoaded(true);
     });
 
     // B. Listen to Reminders for current user
@@ -599,7 +936,7 @@ export default function Dashboard({ user, onSignOut, urlInviteCode }: DashboardP
 
   // Auto-seed relationship reminders to match mockup calendar layout on first run
   useEffect(() => {
-    if (isProfileLoading || !user || !db) return;
+    if (isProfileLoading || !profile || !user || !db || !hasMilestonesLoaded) return;
     
     // Check if there are already any custom special countdowns with the [SPECIAL-COUNTDOWN] tag description
     const specialCountdowns = milestones.filter(m => m.description?.startsWith("[SPECIAL-COUNTDOWN]"));
@@ -738,7 +1075,7 @@ export default function Dashboard({ user, onSignOut, urlInviteCode }: DashboardP
       if (activeId === "relationship_anniversary") {
         if (effectiveAnniversaryDate) {
           targetDate = getNextAnniversary(effectiveAnniversaryDate);
-          label = "Couple Relationship Anniversary";
+          label = isFriendshipMode ? "Best Friends Anniversary" : "Couple Relationship Anniversary";
         }
       } else if (activeId === "days_together_milestone") {
         if (effectiveAnniversaryDate) {
@@ -755,7 +1092,7 @@ export default function Dashboard({ user, onSignOut, urlInviteCode }: DashboardP
             
             const target = new Date(start.getTime() + nextMilest * 24 * 60 * 60 * 1000);
             targetDate = target;
-            label = `Our ${nextMilest} Days Together Celebration 🥂`;
+            label = isFriendshipMode ? `Our ${nextMilest} Days of Friendship Celebration 🥂` : `Our ${nextMilest} Days Together Celebration 🥂`;
           } catch {
             // fallback
           }
@@ -789,7 +1126,7 @@ export default function Dashboard({ user, onSignOut, urlInviteCode }: DashboardP
 
         if (effectiveAnniversaryDate) {
           const rAnn = getNextAnniversary(effectiveAnniversaryDate);
-          if (rAnn) candidates.push({ date: rAnn, label: "Couple Relationship Anniversary" });
+          if (rAnn) candidates.push({ date: rAnn, label: isFriendshipMode ? "Best Friends Anniversary" : "Couple Relationship Anniversary" });
 
           try {
             const start = new Date(effectiveAnniversaryDate);
@@ -801,7 +1138,7 @@ export default function Dashboard({ user, onSignOut, urlInviteCode }: DashboardP
             const baseMilestones = [50, 100, 150, 200, 250, 300, 350, 400, 450, 500, 600, 700, 800, 900, 1000];
             const nextMilest = baseMilestones.find(m => m > diffDays) || ((Math.floor(diffDays / 100) + 1) * 100);
             const target = new Date(start.getTime() + nextMilest * 24 * 60 * 60 * 1000);
-            candidates.push({ date: target, label: `${nextMilest} Days Together Celebration 🥂` });
+            candidates.push({ date: target, label: isFriendshipMode ? `Our ${nextMilest} Days of Friendship Celebration 🥂` : `${nextMilest} Days Together Celebration 🥂` });
           } catch (e) {
             console.error("Error computing auto-proximity days together:", e);
           }
@@ -857,7 +1194,9 @@ export default function Dashboard({ user, onSignOut, urlInviteCode }: DashboardP
     if (unreadMsgCount > 0) {
       list.push({
         key: "unread-secret-msg",
-        text: `💌 You have ${unreadMsgCount} new secret love note${unreadMsgCount > 1 ? 's' : ''}! Open Secret Chat to decrypt.`,
+        text: isFriendshipMode 
+          ? `🌟 You have ${unreadMsgCount} new bestie message${unreadMsgCount > 1 ? 's' : ''}! Open Bestie Messages to decrypt.` 
+          : `💌 You have ${unreadMsgCount} new secret love note${unreadMsgCount > 1 ? 's' : ''}! Open Secret Messages to decrypt.`,
         type: "today"
       });
     }
@@ -877,13 +1216,17 @@ export default function Dashboard({ user, onSignOut, urlInviteCode }: DashboardP
         if (isToday) {
           list.push({
             key: `today-${m.id}`,
-            text: `Today is your "${m.title}"! 🎉 Unlock your wishes vault!`,
+            text: isFriendshipMode 
+              ? `Today is your "${m.title}"! 🎉 Unlock your friendship vault!` 
+              : `Today is your "${m.title}"! 🎉 Unlock your wishes vault!`,
             type: "today"
           });
         } else if (isTomorrow) {
           list.push({
             key: `tomorrow-${m.id}`,
-            text: `Tomorrow is your "${m.title}" ❤️ Prepare a surprise secret card!`,
+            text: isFriendshipMode 
+              ? `Tomorrow is your "${m.title}" 🌟 Prepare a bestie surprise card!` 
+              : `Tomorrow is your "${m.title}" ❤️ Prepare a surprise secret card!`,
             type: "tomorrow"
           });
         }
@@ -895,13 +1238,17 @@ export default function Dashboard({ user, onSignOut, urlInviteCode }: DashboardP
       if (effectiveAnniversaryDate) {
         list.push({
           key: "default-clock",
-          text: "Your Couple Space is active! Ticking down countdown milestones in real time. 💫",
+          text: isFriendshipMode 
+            ? "Your Besties Space is active! Ticking down friendship countdown milestones in real time. 💫" 
+            : "Your Couple Space is active! Ticking down countdown milestones in real time. 💫",
           type: "info"
         });
       } else {
         list.push({
           key: "default-welcome",
-          text: "Welcome to ForeverNote! Add your Anniversary Date in Settings to unlock the countdown calendar! 💖",
+          text: isFriendshipMode 
+            ? "Welcome to ForeverNote! Add your Friendaversary Date in Settings to unlock your countdown calendar! 🌟" 
+            : "Welcome to ForeverNote! Add your Anniversary Date in Settings to unlock the countdown calendar! 💖",
           type: "guide"
         });
       }
@@ -930,6 +1277,8 @@ export default function Dashboard({ user, onSignOut, urlInviteCode }: DashboardP
         partnerName: profPartnerName || "",
         partnerEmail: profPartnerEmail || "",
         anniversaryDate: profAnniversary || "",
+        friendshipMode: editFriendshipMode,
+        appearanceTheme: editAppearanceTheme,
       };
 
       // Safeguard against wiping existing fields
@@ -959,6 +1308,47 @@ export default function Dashboard({ user, onSignOut, urlInviteCode }: DashboardP
     } catch (err: any) {
       setProfileSaving(false);
       setProfileError("Couldn't save: " + (err?.message || err));
+    }
+  };
+
+  // Quick toggle between Friendship / Besties Mode and Couple Mode from sticky header
+  const handleToggleFriendshipMode = async () => {
+    if (!user?.uid || !profile) return;
+    try {
+      const newMode = !isFriendshipMode;
+      const userRef = doc(db, "users", user.uid);
+      
+      // Update local edit state
+      setEditFriendshipMode(newMode);
+      
+      if (user.uid.startsWith("demo") || !db) {
+        setProfile(prev => prev ? { ...prev, friendshipMode: newMode } : null);
+      } else {
+        await updateDoc(userRef, {
+          friendshipMode: newMode
+        });
+        
+        if (profile.connectedPartnerId) {
+          try {
+            const partnerRef = doc(db, "users", profile.connectedPartnerId);
+            await updateDoc(partnerRef, {
+              friendshipMode: newMode
+            });
+          } catch (partnerErr) {
+            console.warn("Failed to automatically update partner's friendship mode:", partnerErr);
+          }
+        }
+      }
+      
+      showNotification(
+        "success", 
+        newMode 
+          ? "Switched to Besties Space! 🌟 Cherish your amazing friendship!" 
+          : "Switched to Couple Space! 💖 Celebrate your love!"
+      );
+    } catch (err: any) {
+      console.error("Error toggling friendship mode:", err);
+      showNotification("error", "Failed to switch modes: " + (err.message || err));
     }
   };
 
@@ -1645,7 +2035,7 @@ export default function Dashboard({ user, onSignOut, urlInviteCode }: DashboardP
   }
 
   return (
-    <div className="min-h-screen bg-linear-to-b from-[#FDFBF7] via-[#FFF8F9] to-[#F1F7FB] pb-16 text-slate-800 relative w-full overflow-x-hidden font-sans">
+    <div className={`min-h-screen ${themeStyles.bodyBg} pb-16 ${themeStyles.isDark ? 'text-slate-100' : 'text-slate-850'} relative w-full overflow-x-hidden font-sans transition-all duration-500`}>
       <AnimatePresence>
         {notification && (
           <motion.div
@@ -1683,16 +2073,18 @@ export default function Dashboard({ user, onSignOut, urlInviteCode }: DashboardP
       />
       
       {/* Top sticky nav bar bar */}
-      <nav id="sticky-header" className="sticky top-0 bg-white/90 backdrop-blur-md border-b border-rose-100/50 z-30 shadow-xs relative">
+      <nav id="sticky-header" className={`sticky top-0 ${themeStyles.isDark ? 'bg-slate-900/90 border-b border-slate-800' : 'bg-white/90 border-b ' + themeStyles.borderAccent + '/50'} backdrop-blur-md z-30 shadow-xs relative transition-all duration-300`}>
         <div className="max-w-7xl mx-auto px-4 sm:px-6 py-3.5 flex items-center justify-between gap-4">
           
           {/* Logo Brand area */}
           <div className="flex items-center gap-2 shrink-0">
-            <div className="bg-pink-500 p-2 rounded-xl text-white shadow-xs animate-pulse">
-              <Heart className="w-5 h-5 fill-white" />
+            <div className={`${themeStyles.iconBg} p-2 rounded-xl text-white shadow-xs animate-pulse`}>
+              {renderLogoIcon()}
             </div>
-            <span className="font-display font-black text-lg sm:text-xl tracking-tight text-slate-850">
-              ForeverNote <span className="text-[11px] bg-pink-100 text-pink-600 font-extrabold px-1.5 py-0.5 rounded-md align-middle inline-block ml-1">LOVEBOARD</span>
+            <span className={`font-display font-black text-lg sm:text-xl tracking-tight ${themeStyles.isDark ? 'text-white' : 'text-slate-850'}`}>
+              ForeverNote <span className={`text-[11px] ${themeStyles.badgeAccent} font-extrabold px-1.5 py-0.5 rounded-md align-middle inline-block ml-1`}>
+                {isFriendshipMode ? "BESTIESBOARD" : "LOVEBOARD"}
+              </span>
             </span>
           </div>
 
@@ -1701,17 +2093,17 @@ export default function Dashboard({ user, onSignOut, urlInviteCode }: DashboardP
             
             {/* Logged in Profiles Info Badge - responsive & non-overlapping truncating wrapper */}
             <span 
-              className="text-[11px] text-slate-500 font-black hidden md:inline-flex items-center gap-1.5 bg-slate-50 border border-slate-205/60 rounded-full px-3 py-1.5 max-w-[280px] lg:max-w-[360px] truncate cursor-help"
+              className={`text-[11px] font-black hidden md:inline-flex items-center gap-1.5 ${themeStyles.isDark ? 'bg-slate-800/80 border-slate-700/60 text-slate-300' : 'bg-slate-50 border border-slate-200 text-slate-500'} rounded-full px-3 py-1.5 max-w-[280px] lg:max-w-[360px] truncate cursor-help`}
               title={profile?.partnerName ? `${profile?.name || user.displayName} & ${profile.partnerName} connected. Partner last active: ${formatFriendlyActiveStatus(partnerProfile?.lastVisitedAt)}` : `Waiting for partner...`}
             >
-              <Smile className="w-4 h-4 text-pink-400 shrink-0" />
+              <Smile className={`w-4 h-4 ${themeStyles.textAccent} shrink-0`} />
               <span className="truncate max-w-[80px]" title={profile?.name || user.displayName}>
                 {profile?.name || user.displayName}
               </span>
               {profile?.partnerName && (
                 <>
                   <span className="text-slate-300 font-normal">&amp;</span>
-                  <span className="text-pink-600 truncate max-w-[80px]" title={profile.partnerName}>
+                  <span className={`${themeStyles.textAccent} truncate max-w-[80px] font-bold`} title={profile.partnerName}>
                     {profile.partnerName}
                   </span>
                   <span className="relative flex h-2 w-2 ml-0.5 shrink-0" title={`Partner Active: ${formatFriendlyActiveStatus(partnerProfile?.lastVisitedAt)}`}>
@@ -1722,10 +2114,42 @@ export default function Dashboard({ user, onSignOut, urlInviteCode }: DashboardP
               )}
             </span>
 
+            {/* Friends / Couple Switch Option */}
+            <div 
+              onClick={handleToggleFriendshipMode}
+              className={`relative cursor-pointer select-none rounded-full p-0.5 flex items-center transition-all duration-300 ${
+                isFriendshipMode 
+                  ? 'bg-slate-800 border border-slate-700' 
+                  : 'bg-pink-100 border border-pink-200'
+              } w-[76px] sm:w-[100px] h-8 sm:h-9 shrink-0 shadow-3xs hover:scale-105 active:scale-95`}
+              title={isFriendshipMode ? "Active: Besties Space. Click to switch to Couple Space! 💖" : "Active: Couple Space. Click to switch to Besties Space! 🌟"}
+            >
+              {/* Slider thumb */}
+              <div 
+                className={`absolute top-0.5 bottom-0.5 rounded-full shadow-xs transition-all duration-300 flex items-center justify-center ${
+                  isFriendshipMode 
+                    ? 'left-[38px] sm:left-[50px] right-0.5 bg-slate-900 text-teal-400' 
+                    : 'left-0.5 right-[38px] sm:right-[50px] bg-white text-pink-600'
+                }`}
+              >
+                {isFriendshipMode ? (
+                  <Smile className="w-3.5 h-3.5 sm:w-4 sm:h-4 fill-current" />
+                ) : (
+                  <Heart className="w-3.5 h-3.5 sm:w-4 sm:h-4 fill-current animate-pulse" />
+                )}
+              </div>
+              
+              {/* Toggle text labels */}
+              <div className="w-full flex justify-between px-2.5 text-[8.5px] sm:text-[10px] font-black uppercase pointer-events-none tracking-wider select-none">
+                <span className={isFriendshipMode ? 'text-slate-500 opacity-40' : 'text-pink-700'}>Love</span>
+                <span className={isFriendshipMode ? 'text-teal-400 font-extrabold' : 'text-pink-300/40'}>Bff</span>
+              </div>
+            </div>
+
             {/* Quick Settings Icon */}
             <button
               onClick={() => setIsSettingsOpen(true)}
-              className="p-2 sm:p-2.5 border border-slate-200/80 hover:bg-slate-50 hover:border-slate-350 text-slate-600 hover:text-slate-800 rounded-xl transition cursor-pointer shrink-0"
+              className={`p-2 sm:p-2.5 border ${themeStyles.isDark ? 'border-slate-700 hover:bg-slate-800 text-slate-300 hover:text-white' : 'border-slate-200/80 hover:bg-slate-50 hover:border-slate-350 text-slate-600 hover:text-slate-800'} rounded-xl transition cursor-pointer shrink-0`}
               title="Settings & Connection Code"
               aria-label="Settings"
             >
@@ -1737,22 +2161,24 @@ export default function Dashboard({ user, onSignOut, urlInviteCode }: DashboardP
               onClick={() => {
                 onSignOut();
               }}
-              className="px-3 py-1.5 sm:px-4 sm:py-2 border border-rose-200 hover:border-rose-300 bg-rose-50/75 hover:bg-rose-100 text-rose-600 hover:text-rose-700 rounded-xl transition cursor-pointer flex items-center gap-1.5 text-xs font-black shadow-3xs shrink-0"
+              className={`px-3 py-1.5 sm:px-4 sm:py-2 border ${themeStyles.isDark ? 'border-indigo-900 bg-indigo-950/40 hover:bg-indigo-900/40 text-indigo-300' : 'border-rose-200 hover:border-rose-300 bg-rose-50/75 hover:bg-rose-100 text-rose-600 hover:text-rose-700'} rounded-xl transition cursor-pointer flex items-center gap-1.5 text-xs font-black shadow-3xs shrink-0`}
               title="Sign out of ForeverNote"
             >
-              <LogOut className="w-4 h-4 text-rose-500" />
+              <LogOut className={`w-4 h-4 ${themeStyles.isDark ? 'text-indigo-400' : 'text-rose-500'}`} />
               <span>Sign Out</span>
             </button>
           </div>
         </div>
 
         {/* Global categories navigation strip - displayed on ALL devices to prevent horizontal overflows in Row 1 */}
-        <div className="flex items-center justify-start sm:justify-center border-t border-rose-100/40 py-2.5 px-3 bg-slate-50/40 text-xs font-bold overflow-x-auto gap-2.5 scrollbar-none snap-x whitespace-nowrap w-full border-b border-rose-100/30">
+        <div className={`flex items-center justify-start sm:justify-center border-t ${themeStyles.isDark ? 'border-slate-800 bg-slate-900/50' : 'border-' + themeStyles.borderAccent + '/40 bg-slate-50/40'} py-2.5 px-3 text-xs font-bold overflow-x-auto gap-2.5 scrollbar-none snap-x whitespace-nowrap w-full border-b ${themeStyles.isDark ? 'border-slate-800' : 'border-' + themeStyles.borderAccent + '/30'} transition-all duration-300`}>
           <button
             onClick={() => setActiveTab('timeline')}
             className={`px-3 md:px-4 py-1.5 transition shrink-0 rounded-full snap-center text-[11px] font-extrabold flex items-center gap-1 ${
               activeTab === 'timeline' 
-                ? 'bg-pink-600 text-white shadow-xs' 
+                ? `${themeStyles.primaryBg} text-white shadow-xs` 
+                : themeStyles.isDark 
+                ? 'bg-slate-800 border border-slate-700 text-slate-300 hover:text-white hover:bg-slate-700'
                 : 'bg-white border border-slate-200/50 text-slate-500 hover:text-slate-800'
             }`}
             title="Pristine diary log & map of your unforgettable milestones"
@@ -1763,34 +2189,40 @@ export default function Dashboard({ user, onSignOut, urlInviteCode }: DashboardP
             onClick={() => setActiveTab('messages')}
             className={`px-3 md:px-4 py-1.5 transition shrink-0 rounded-full snap-center text-[11px] font-extrabold flex items-center gap-1.5 relative ${
               activeTab === 'messages' 
-                ? 'bg-pink-600 text-white shadow-xs' 
+                ? `${themeStyles.primaryBg} text-white shadow-xs` 
+                : themeStyles.isDark 
+                ? 'bg-slate-800 border border-slate-700 text-slate-300 hover:text-white hover:bg-slate-700'
                 : 'bg-white border border-slate-200/50 text-slate-500 hover:text-slate-800'
             }`}
           >
-            <span>💬 Secret Messages</span>
+            <span>💬 {isFriendshipMode ? "Bestie Messages" : "Secret Messages"}</span>
             {unreadMsgCount > 0 ? (
-              <span className="flex h-4 min-w-4 px-1 items-center justify-center bg-pink-500 text-white rounded-full text-[9px] font-black animate-pulse">
+              <span className={`flex h-4 min-w-4 px-1 items-center justify-center ${themeStyles.isDark ? 'bg-indigo-500' : 'bg-pink-500'} text-white rounded-full text-[9px] font-black animate-pulse`}>
                 {unreadMsgCount}
               </span>
             ) : profile?.connectedPartnerId ? (
-              <span className="bg-pink-50 text-pink-600 text-[10px] px-1.5 py-0.5 rounded-full font-bold">🔒</span>
+              <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-bold ${themeStyles.isDark ? 'bg-slate-900 text-slate-400' : 'bg-pink-50 text-pink-600'}`}>🔒</span>
             ) : null}
           </button>
           <button
             onClick={() => setActiveTab('interactive')}
             className={`px-3 md:px-4 py-1.5 transition shrink-0 rounded-full snap-center text-[11px] font-extrabold flex items-center gap-1 ${
               activeTab === 'interactive' 
-                ? 'bg-pink-600 text-white shadow-xs' 
+                ? `${themeStyles.primaryBg} text-white shadow-xs` 
+                : themeStyles.isDark 
+                ? 'bg-slate-800 border border-slate-700 text-slate-300 hover:text-white hover:bg-slate-700'
                 : 'bg-white border border-slate-200/50 text-slate-500 hover:text-slate-800'
             }`}
           >
-            <span>📋 Connection Quest</span>
+            <span>📋 {isFriendshipMode ? "Bestie Quest" : "Connection Quest"}</span>
           </button>
           <button
             onClick={() => setActiveTab('storyteller')}
             className={`px-3 md:px-4 py-1.5 transition shrink-0 rounded-full snap-center text-[11px] font-extrabold flex items-center gap-1 ${
               activeTab === 'storyteller' 
-                ? 'bg-pink-600 text-white shadow-xs' 
+                ? `${themeStyles.primaryBg} text-white shadow-xs` 
+                : themeStyles.isDark 
+                ? 'bg-slate-800 border border-slate-700 text-slate-300 hover:text-white hover:bg-slate-700'
                 : 'bg-white border border-slate-200/50 text-slate-500 hover:text-slate-800'
             }`}
           >
@@ -1800,17 +2232,21 @@ export default function Dashboard({ user, onSignOut, urlInviteCode }: DashboardP
             onClick={() => setActiveTab('wishes')}
             className={`px-3 md:px-4 py-1.5 transition shrink-0 rounded-full snap-center text-[11px] font-extrabold flex items-center gap-1 ${
               activeTab === 'wishes' 
-                ? 'bg-pink-600 text-white shadow-xs' 
+                ? `${themeStyles.primaryBg} text-white shadow-xs` 
+                : themeStyles.isDark 
+                ? 'bg-slate-800 border border-slate-700 text-slate-300 hover:text-white hover:bg-slate-700'
                 : 'bg-white border border-slate-200/50 text-slate-500 hover:text-slate-800'
             }`}
           >
-            <span>🎁 Wishes &amp; Vault</span>
+            <span>🎁 {isFriendshipMode ? "Bestie Vault" : "Wishes & Vault"}</span>
           </button>
           <button
             onClick={() => setActiveTab('reminders')}
             className={`px-3 md:px-4 py-1.5 transition shrink-0 rounded-full snap-center text-[11px] font-extrabold flex items-center gap-1 ${
               activeTab === 'reminders' 
-                ? 'bg-pink-600 text-white shadow-xs' 
+                ? `${themeStyles.primaryBg} text-white shadow-xs` 
+                : themeStyles.isDark 
+                ? 'bg-slate-800 border border-slate-700 text-slate-300 hover:text-white hover:bg-slate-700'
                 : 'bg-white border border-slate-200/50 text-slate-500 hover:text-slate-800'
             }`}
           >
@@ -1820,7 +2256,9 @@ export default function Dashboard({ user, onSignOut, urlInviteCode }: DashboardP
             onClick={() => setActiveTab('gallery')}
             className={`px-3 md:px-4 py-1.5 transition shrink-0 rounded-full snap-center text-[11px] font-extrabold flex items-center gap-1 ${
               activeTab === 'gallery' 
-                ? 'bg-pink-600 text-white shadow-xs' 
+                ? `${themeStyles.primaryBg} text-white shadow-xs` 
+                : themeStyles.isDark 
+                ? 'bg-slate-800 border border-slate-700 text-slate-300 hover:text-white hover:bg-slate-700'
                 : 'bg-white border border-slate-200/50 text-slate-500 hover:text-slate-800'
             }`}
           >
@@ -1832,6 +2270,31 @@ export default function Dashboard({ user, onSignOut, urlInviteCode }: DashboardP
       {/* Main dashboard content */}
       <main className="max-w-7xl mx-auto px-3 sm:px-6 py-6 sm:py-8 space-y-6 sm:space-y-8">
         
+        {/* India DPDP Consent Withdrawn Restricted Alert Banner */}
+        {!privacyConsent && (
+          <motion.div
+            initial={{ opacity: 0, y: -10 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="bg-amber-50 border border-amber-300 text-amber-900 rounded-3xl p-5 shadow-xs space-y-3 relative overflow-hidden"
+          >
+            <div className="absolute top-0 right-0 w-32 h-32 bg-amber-400/10 rounded-full blur-2xl pointer-events-none" />
+            <div className="flex items-start gap-4">
+              <div className="bg-amber-100 text-amber-700 p-3 rounded-2xl shrink-0">
+                <AlertCircle className="w-6 h-6 shrink-0" />
+              </div>
+              <div className="space-y-1">
+                <h3 className="font-display font-extrabold text-sm text-amber-900 flex items-center gap-2">
+                  <span>Consent Withdrawn (सहमति वापस ली गई)</span>
+                  <span className="text-[10px] bg-amber-200 text-amber-800 font-bold px-2 py-0.5 rounded-full uppercase tracking-wider font-mono">Restricted Mode</span>
+                </h3>
+                <p className="text-xs leading-relaxed text-amber-850 font-semibold max-w-4xl">
+                  <strong>Notice under India DPDP Act, 2023:</strong> You have exercised your legal right to withdraw consent. Under Section 6(4) of the Act, we have ceased further active data collection and processing. Your shared timeline, memories, and messages are now in restricted <strong>Read-Only Mode</strong>. You can re-enable consent inside the <span className="underline font-bold cursor-pointer" onClick={() => setIsSettingsOpen(true)}>Configuration Panel</span> or request a complete, permanent erasure of all your personal data.
+                </p>
+              </div>
+            </div>
+          </motion.div>
+        )}
+
         {/* Real-time Connection Status Indicator */}
         <div id="connection-status-panel" className="relative">
           {isConnectionPanelCollapsed ? (
@@ -2745,6 +3208,8 @@ export default function Dashboard({ user, onSignOut, urlInviteCode }: DashboardP
                 profile={profile}
                 milestones={timelineMilestones}
                 remindersCount={reminders.length}
+                globalGuestVisits={globalGuestVisits}
+                myGuestVisits={myGuestVisits}
               />
 
               {/* Unique design to view in timeline scrapbook area */}
@@ -4827,7 +5292,9 @@ export default function Dashboard({ user, onSignOut, urlInviteCode }: DashboardP
                 </div>
 
                 <div className="space-y-1">
-                  <label className="text-[10px] uppercase font-bold text-slate-400 block pb-0.5">Partner Name</label>
+                  <label className="text-[10px] uppercase font-bold text-slate-400 block pb-0.5">
+                    {editFriendshipMode ? "Bestie / Friend Name" : "Partner Name"}
+                  </label>
                   <input
                     type="text"
                     className="w-full px-4 py-2 bg-slate-50 border border-slate-200 text-xs rounded-xl focus:outline-hidden"
@@ -4837,7 +5304,9 @@ export default function Dashboard({ user, onSignOut, urlInviteCode }: DashboardP
                 </div>
 
                 <div className="space-y-1">
-                  <label className="text-[10px] uppercase font-bold text-slate-400 block pb-0.5">Partner Email</label>
+                  <label className="text-[10px] uppercase font-bold text-slate-400 block pb-0.5">
+                    {editFriendshipMode ? "Bestie / Friend Email" : "Partner Email"}
+                  </label>
                   <input
                     type="email"
                     className="w-full px-4 py-2 bg-slate-50 border border-slate-200 text-xs rounded-xl focus:outline-hidden"
@@ -4847,7 +5316,9 @@ export default function Dashboard({ user, onSignOut, urlInviteCode }: DashboardP
                 </div>
 
                 <div className="space-y-1">
-                  <label className="text-[10px] uppercase font-bold text-slate-400 block pb-0.5">Relationship Anniversary Date</label>
+                  <label className="text-[10px] uppercase font-bold text-slate-400 block pb-0.5">
+                    {editFriendshipMode ? "Friendship Anniversary Date" : "Relationship Anniversary Date"}
+                  </label>
                   <input
                     type="date"
                     className="w-full px-4 py-2 bg-slate-50 border border-slate-200 text-xs rounded-xl focus:outline-hidden cursor-pointer"
@@ -4856,8 +5327,71 @@ export default function Dashboard({ user, onSignOut, urlInviteCode }: DashboardP
                   />
                 </div>
 
+                {/* Vibe Mode Selection */}
+                <div className="space-y-1.5 bg-slate-50 border border-slate-100 p-3.5 rounded-2xl">
+                  <label className="text-[10px] uppercase font-bold text-slate-400 block">Board Vibe Mode</label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setEditFriendshipMode(false)}
+                      className={`py-2 px-3 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer ${
+                        !editFriendshipMode
+                          ? "bg-pink-600 text-white shadow-3xs"
+                          : "bg-white border border-slate-250 text-slate-600 hover:text-slate-800"
+                      }`}
+                    >
+                      <Heart className="w-3.5 h-3.5 fill-current" />
+                      <span>Couple Space</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setEditFriendshipMode(true)}
+                      className={`py-2 px-3 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer ${
+                        editFriendshipMode
+                          ? "bg-slate-800 text-white shadow-3xs"
+                          : "bg-white border border-slate-250 text-slate-600 hover:text-slate-800"
+                      }`}
+                    >
+                      <Smile className="w-3.5 h-3.5 fill-current" />
+                      <span>Besties Space</span>
+                    </button>
+                  </div>
+                  <span className="text-[9.5px] text-slate-400 block leading-snug">
+                    Toggles indicators between romance and companionship modes!
+                  </span>
+                </div>
+
+                {/* Appearance Theme Selector */}
+                <div className="space-y-1.5 bg-slate-50 border border-slate-100 p-3.5 rounded-2xl">
+                  <label className="text-[10px] uppercase font-bold text-slate-400 block">Board Appearance Theme</label>
+                  <div className="grid grid-cols-3 gap-2">
+                    {[
+                      { id: "rose", name: "Romantic Rose", bg: "bg-pink-500" },
+                      { id: "slate", name: "Modern Slate", bg: "bg-slate-800" },
+                      { id: "amber", name: "Sunlit Amber", bg: "bg-amber-500" },
+                      { id: "lavender", name: "Cozy Lavender", bg: "bg-violet-500" },
+                      { id: "emerald", name: "Emerald Forest", bg: "bg-emerald-500" },
+                      { id: "midnight", name: "Celestial Midnight", bg: "bg-indigo-950" },
+                    ].map((t) => (
+                      <button
+                        key={t.id}
+                        type="button"
+                        onClick={() => setEditAppearanceTheme(t.id)}
+                        className={`p-2 rounded-xl border text-[10px] font-bold flex flex-col items-center justify-center gap-1 transition cursor-pointer ${
+                          editAppearanceTheme === t.id
+                            ? "bg-white border-slate-800 shadow-3xs ring-2 ring-slate-800/10"
+                            : "bg-white border-slate-200 hover:border-slate-300 text-slate-500"
+                        }`}
+                      >
+                        <span className={`w-4 h-4 rounded-full ${t.bg} block shrink-0`}></span>
+                        <span className="truncate max-w-full text-center leading-none">{t.name}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
                 <div className="pt-2 flex justify-between gap-2.5">
-                  <span className="text-[10px] text-slate-400 block leading-tight">Generate custom relationship countdowns dynamically.</span>
+                  <span className="text-[10px] text-slate-400 block leading-tight">Generate custom countdowns dynamically.</span>
                   <button
                     type="submit"
                     disabled={profileSaving}
@@ -4967,6 +5501,153 @@ export default function Dashboard({ user, onSignOut, urlInviteCode }: DashboardP
                     </div>
                   </div>
                 )}
+              </div>
+
+              {/* India DPDP Act, 2023 Compliance Center */}
+              <div className="pt-4 border-t border-slate-100 space-y-4">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1.5">
+                    <CheckCircle className="w-4 h-4 text-pink-600" />
+                    <h4 className="text-[11px] uppercase font-bold text-slate-800 tracking-wider">DPDP Privacy &amp; Compliance Center</h4>
+                  </div>
+                  {/* Language Tab */}
+                  <div className="flex bg-slate-100 p-0.5 rounded-lg border border-slate-200">
+                    <button
+                      type="button"
+                      onClick={() => setDpdpLanguage('en')}
+                      className={`px-2 py-0.5 text-[9px] font-bold rounded-md transition ${dpdpLanguage === 'en' ? 'bg-white text-slate-800 shadow-3xs' : 'text-slate-500 hover:text-slate-700'}`}
+                    >
+                      EN
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setDpdpLanguage('hi')}
+                      className={`px-2 py-0.5 text-[9px] font-bold rounded-md transition ${dpdpLanguage === 'hi' ? 'bg-white text-slate-800 shadow-3xs' : 'text-slate-500 hover:text-slate-700'}`}
+                    >
+                      हिन्दी
+                    </button>
+                  </div>
+                </div>
+
+                <div className="p-4 bg-slate-50 border border-slate-200/60 rounded-2xl space-y-3.5">
+                  {dpdpLanguage === 'en' ? (
+                    <div className="space-y-3 text-[11px] leading-relaxed text-slate-650">
+                      <div className="flex items-center justify-between bg-white border border-slate-100 rounded-xl p-2.5 shadow-3xs">
+                        <span className="font-semibold text-slate-700">Active Consent (Section 6)</span>
+                        <div className="flex items-center gap-2">
+                          <span className={`text-[9px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wider ${privacyConsent ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800 animate-pulse'}`}>
+                            {privacyConsent ? 'Granted' : 'Withdrawn'}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => handleToggleConsent(!privacyConsent)}
+                            className="text-[9.5px] text-pink-600 hover:text-pink-700 font-extrabold cursor-pointer text-center"
+                          >
+                            {privacyConsent ? 'Withdraw' : 'Re-enable'}
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="space-y-1.5">
+                        <span className="text-[9px] uppercase font-bold text-slate-400 block tracking-wider">Your Digital Personal Rights</span>
+                        <div className="grid grid-cols-2 gap-2">
+                          <button
+                            type="button"
+                            onClick={handleExportAllUserData}
+                            className="p-2.5 bg-white hover:bg-slate-50 rounded-xl border border-slate-200/60 text-left cursor-pointer transition shadow-3xs hover:scale-[1.01] flex flex-col justify-between h-full"
+                          >
+                            <span className="text-slate-700 font-bold block">Right to Portability</span>
+                            <span className="text-[9.5px] text-slate-450 font-semibold block pt-0.5">Download full memories scrapbook data in raw JSON format instantly.</span>
+                          </button>
+                          <button
+                            type="button"
+                            disabled={isEraseProcessing}
+                            onClick={handleEraseAllUserData}
+                            className="p-2.5 bg-rose-50/70 hover:bg-rose-100/70 rounded-xl border border-rose-150 text-left cursor-pointer transition shadow-3xs hover:scale-[1.01] flex flex-col justify-between h-full"
+                          >
+                            <span className="text-rose-700 font-bold block">Right to Erasure</span>
+                            <span className="text-[9.5px] text-rose-550 font-semibold block pt-0.5">Request immediate, complete, permanent purge of your whole account.</span>
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="bg-white border border-slate-100 rounded-xl p-3 space-y-2 text-[10px]">
+                        <div className="flex items-center gap-1.5 text-slate-700 font-bold border-b border-slate-100 pb-1.5">
+                          <Info className="w-3.5 h-3.5 text-slate-500" />
+                          <span>GCP India Region Statement</span>
+                        </div>
+                        <p className="text-slate-500 leading-relaxed">
+                          All personal relationship scrapbooks, letters, images, and logs are hosted on Google Cloud Platform (Firebase) inside sovereign Indian borders: <strong>Mumbai, India (asia-south1)</strong>, complying strictly with data localization guidelines.
+                        </p>
+                      </div>
+
+                      <div className="bg-white border border-slate-100 rounded-xl p-3 space-y-1 text-[9.5px] text-slate-500 font-medium">
+                        <div className="font-bold text-slate-700 text-[10px] pb-1">Grievance Redressal (Section 11)</div>
+                        <div><strong>Grievance Officer:</strong> Mr. Amit Sharma</div>
+                        <div><strong>Email Address:</strong> privacy@forevernote.in</div>
+                        <div className="leading-snug pt-0.5"><strong>Procedure:</strong> Send a brief notice of your grievance. We will address and resolve all data concerns within 7 days.</div>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="space-y-3 text-[11px] leading-relaxed text-slate-650">
+                      <div className="flex items-center justify-between bg-white border border-slate-100 rounded-xl p-2.5 shadow-3xs">
+                        <span className="font-semibold text-slate-700">सक्रिय सहमति (धारा 6)</span>
+                        <div className="flex items-center gap-2">
+                          <span className={`text-[9px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wider ${privacyConsent ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800 animate-pulse'}`}>
+                            {privacyConsent ? 'स्वीकृत' : 'वापस ली गई'}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => handleToggleConsent(!privacyConsent)}
+                            className="text-[9.5px] text-pink-600 hover:text-pink-700 font-extrabold cursor-pointer text-center"
+                          >
+                            {privacyConsent ? 'वापस लें' : 'स्वीकारें'}
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="space-y-1.5">
+                        <span className="text-[9px] uppercase font-bold text-slate-400 block tracking-wider">आपके डिजिटल व्यक्तिगत अधिकार</span>
+                        <div className="grid grid-cols-2 gap-2">
+                          <button
+                            type="button"
+                            onClick={handleExportAllUserData}
+                            className="p-2.5 bg-white hover:bg-slate-50 rounded-xl border border-slate-200/60 text-left cursor-pointer transition shadow-3xs hover:scale-[1.01] flex flex-col justify-between h-full"
+                          >
+                            <span className="text-slate-700 font-bold block">पोर्टेबिलिटी का अधिकार</span>
+                            <span className="text-[9.5px] text-slate-450 font-semibold block pt-0.5">सभी यादों का पूरा डेटा तुरंत JSON प्रारूप में सुरक्षित डाउनलोड करें।</span>
+                          </button>
+                          <button
+                            type="button"
+                            disabled={isEraseProcessing}
+                            onClick={handleEraseAllUserData}
+                            className="p-2.5 bg-rose-50/70 hover:bg-rose-100/70 rounded-xl border border-rose-150 text-left cursor-pointer transition shadow-3xs hover:scale-[1.01] flex flex-col justify-between h-full"
+                          >
+                            <span className="text-rose-700 font-bold block">मिटाने का अधिकार</span>
+                            <span className="text-[9.5px] text-rose-550 font-semibold block pt-0.5">अपने खाते और सभी व्यक्तिगत यादों को स्थायी रूप से मिटाने का अनुरोध करें।</span>
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="bg-white border border-slate-100 rounded-xl p-3 space-y-2 text-[10px]">
+                        <div className="flex items-center gap-1.5 text-slate-700 font-bold border-b border-slate-100 pb-1.5">
+                          <Info className="w-3.5 h-3.5 text-slate-500" />
+                          <span>GCP भारत क्षेत्र विवरण</span>
+                        </div>
+                        <p className="text-slate-500 leading-relaxed">
+                          सभी व्यक्तिगत रिलेशनशिप स्क्रैपबुक, पत्र, चित्र और लॉग भारत की संप्रभु सीमाओं के भीतर <strong>मुंबई, भारत (asia-south1)</strong> में Google क्लाउड प्लेटफ़ॉर्म (Firebase) पर सुरक्षित रूप से संग्रहीत हैं।
+                        </p>
+                      </div>
+
+                      <div className="bg-white border border-slate-100 rounded-xl p-3 space-y-1 text-[9.5px] text-slate-500 font-medium">
+                        <div className="font-bold text-slate-700 text-[10px] pb-1">शिकायत निवारण तंत्र (धारा 11)</div>
+                        <div><strong>शिकायत अधिकारी:</strong> श्री अमित शर्मा</div>
+                        <div><strong>ईमेल पता:</strong> privacy@forevernote.in</div>
+                        <div className="leading-snug pt-0.5"><strong>प्रक्रिया:</strong> अपनी शिकायत का संक्षिप्त विवरण भेजें। हम 7 दिनों के भीतर सभी चिंताओं का निवारण करेंगे।</div>
+                      </div>
+                    </div>
+                  )}
+                </div>
               </div>
 
               {/* Secure prominently placed Sign Out Option inside Configuration Panel */}

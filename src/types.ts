@@ -9,6 +9,8 @@ export interface UserProfile {
   inviteCode?: string;
   partnerInviteCode?: string;
   connectedPartnerId?: string;
+  friendshipMode?: boolean;
+  appearanceTheme?: string;
 }
 
 export type MilestoneType = 'First Meet' | 'First Date' | 'First Talk' | 'First Trip' | 'Proposal' | 'Anniversary' | 'Custom';

@@ -4,6 +4,7 @@ import { motion, AnimatePresence } from "motion/react";
 import { Heart } from "lucide-react";
 import { auth, db, signInWithGoogle, googleProvider, doc, getDoc, setDoc, updateDoc, collection, query, where, getDocs, serverTimestamp, writeBatch, setVirtualSession, getVirtualUser } from "./firebase";
 import PremiumBackgroundAnimation from "./components/PremiumBackgroundAnimation";
+import { secureStorage } from "./utils/secureStorage";
 
 // Lazy-loaded routes for ultra-fast, optimized page load timings (sub-second FCP)
 const LandingPage = lazy(() => import("./components/LandingPage"));
@@ -45,9 +46,9 @@ export default function App() {
       if (codeParam) {
         const cleanedCode = codeParam.trim().toUpperCase();
         setUrlInviteCode(cleanedCode);
-        localStorage.setItem("fn_url_invite_code", cleanedCode);
+        secureStorage.setItem("fn_url_invite_code", cleanedCode);
       } else {
-        const persisted = localStorage.getItem("fn_url_invite_code");
+        const persisted = secureStorage.getItem("fn_url_invite_code");
         if (persisted) {
           setUrlInviteCode(persisted);
         }
@@ -285,8 +286,7 @@ export default function App() {
 
         if (isConfigError || fbErr?.code === "auth/operation-not-allowed") {
           // Check if email already registered in virtual mode
-          const savedAccountsRaw = localStorage.getItem("fn_virtual_accounts") || "{}";
-          const savedAccounts = JSON.parse(savedAccountsRaw);
+          const savedAccounts = secureStorage.getJSON("fn_virtual_accounts") || {};
           const emailLower = email.trim().toLowerCase();
 
           if (savedAccounts[emailLower]) {
@@ -303,7 +303,7 @@ export default function App() {
           };
 
           savedAccounts[emailLower] = { name, password };
-          localStorage.setItem("fn_virtual_accounts", JSON.stringify(savedAccounts));
+          secureStorage.setItem("fn_virtual_accounts", savedAccounts);
 
           const userRef = doc(db, "users", virtualUid);
           const randomCode = generateInviteCode();
@@ -373,8 +373,7 @@ export default function App() {
         console.warn("Firebase Auth signin failed, trying virtual database fallback...", fbErr);
         
         // Always check virtual accounts fallback first on configuration/connection errors or when standard login fails
-        const savedAccountsRaw = localStorage.getItem("fn_virtual_accounts") || "{}";
-        const savedAccounts = JSON.parse(savedAccountsRaw);
+        const savedAccounts = secureStorage.getJSON("fn_virtual_accounts") || {};
         const emailLower = email.trim().toLowerCase();
         const account = savedAccounts[emailLower];
 
@@ -412,7 +411,7 @@ export default function App() {
           };
 
           savedAccounts[emailLower] = { name: virtualUser.displayName, password };
-          localStorage.setItem("fn_virtual_accounts", JSON.stringify(savedAccounts));
+          secureStorage.setItem("fn_virtual_accounts", savedAccounts);
 
           const userRef = doc(db, "users", virtualUid);
           const randomCode = generateInviteCode();

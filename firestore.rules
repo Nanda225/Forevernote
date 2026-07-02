@@ -41,16 +41,24 @@ service cloud.firestore {
     // --- Entity Validations (No existing() or diff() inside helpers) ---
     function isValidUser(data) {
       return data.keys().hasAll(['name', 'email', 'createdAt'])
-        && data.keys().size() <= 15
+        && data.keys().size() <= 25
         && data.name is string && data.name.size() <= 100
         && data.email is string && data.email.size() <= 100
-        && (!data.keys().hasAny(['partnerName']) || (data.partnerName is string && data.partnerName.size() <= 100))
-        && (!data.keys().hasAny(['partnerEmail']) || (data.partnerEmail is string && data.partnerEmail.size() <= 100))
-        && (!data.keys().hasAny(['anniversaryDate']) || (data.anniversaryDate is string && data.anniversaryDate.size() <= 15))
-        && (!data.keys().hasAny(['inviteCode']) || (data.inviteCode is string && data.inviteCode.size() <= 50))
-        && (!data.keys().hasAny(['partnerInviteCode']) || (data.partnerInviteCode is string && data.partnerInviteCode.size() <= 50))
-        && (!data.keys().hasAny(['connectedPartnerId']) || (data.connectedPartnerId is string && data.connectedPartnerId.size() <= 128))
-        && (!data.keys().hasAny(['activeCountdownId']) || (data.activeCountdownId is string && data.activeCountdownId.size() <= 100))
+        && (!('partnerName' in data) || (data.partnerName is string && data.partnerName.size() <= 100))
+        && (!('partnerEmail' in data) || (data.partnerEmail is string && data.partnerEmail.size() <= 100))
+        && (!('anniversaryDate' in data) || (data.anniversaryDate is string && data.anniversaryDate.size() <= 15))
+        && (!('inviteCode' in data) || (data.inviteCode is string && data.inviteCode.size() <= 50))
+        && (!('partnerInviteCode' in data) || (data.partnerInviteCode is string && data.partnerInviteCode.size() <= 50))
+        && (!('connectedPartnerId' in data) || (data.connectedPartnerId is string && data.connectedPartnerId.size() <= 128))
+        && (!('activeCountdownId' in data) || (data.activeCountdownId is string && data.activeCountdownId.size() <= 100))
+        && (!('friendshipMode' in data) || data.friendshipMode is bool)
+        && (!('appearanceTheme' in data) || (data.appearanceTheme is string && data.appearanceTheme.size() <= 50))
+        && (!('lastVisitedAt' in data) || (data.lastVisitedAt is string && data.lastVisitedAt.size() <= 100))
+        && (!('displayName' in data) || (data.displayName is string && data.displayName.size() <= 100))
+        && (!('uid' in data) || (data.uid is string && data.uid.size() <= 128))
+        && (!('currentMood' in data) || (data.currentMood is string && data.currentMood.size() <= 100))
+        && (!('currentMoodText' in data) || (data.currentMoodText is string && data.currentMoodText.size() <= 500))
+        && (!('currentMoodUpdatedAt' in data) || (data.currentMoodUpdatedAt is string && data.currentMoodUpdatedAt.size() <= 100))
         && data.createdAt is timestamp;
     }
 
@@ -117,7 +125,7 @@ service cloud.firestore {
                        (
                          // Allow connected partner to update activeCountdownId on other user
                          existing().connectedPartnerId == request.auth.uid &&
-                         incoming().diff(existing()).affectedKeys().hasOnly(['activeCountdownId'])
+                         incoming().diff(existing()).affectedKeys().hasOnly(['activeCountdownId', 'friendshipMode'])
                        ) ||
                        (
                          // Non-owner linking or unlinking
@@ -219,6 +227,11 @@ service cloud.firestore {
                        );
                         
       allow delete: if isEmailVerified() && isValidId(photoId) && existing().userId == request.auth.uid;
+    }
+
+    // Public Stats Collection for Guest Visit Counts
+    match /public_stats/{statId} {
+      allow read, write: if true;
     }
   }
 }
