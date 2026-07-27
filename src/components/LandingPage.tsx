@@ -6,7 +6,7 @@ import {
   Lock, CheckCircle, FileText, Camera, Mic, Film, Globe, Info,
   ChevronLeft, ChevronRight
 } from "lucide-react";
-import { db, doc, getDoc, setDoc, onSnapshot } from "../firebase";
+import { db, doc, getDoc, setDoc, onSnapshot, updateDoc } from "../firebase";
 const coupleMountainSunset = new URL("../assets/images/couple_mountain_sunset_1780158680001.png", import.meta.url).href;
 const coupleParkWalk = new URL("../assets/images/couple_park_walk_1780158734763.png", import.meta.url).href;
 const coupleTrainSunset = new URL("../assets/images/couple_train_sunset_1780158700135.png", import.meta.url).href;
@@ -67,6 +67,14 @@ export default function LandingPage({
   // Guest Visitor Counter States
   const [globalGuestVisits, setGlobalGuestVisits] = useState<number>(0);
   const [myGuestVisits, setMyGuestVisits] = useState<number>(0);
+  const [sessionLogId, setSessionLogId] = useState<string>("");
+  const [visitorName, setVisitorName] = useState<string>(() => {
+    try {
+      return localStorage.getItem("fn_visitor_name") || "";
+    } catch {
+      return "";
+    }
+  });
 
   useEffect(() => {
     let inIframe = false;
@@ -76,6 +84,16 @@ export default function LandingPage({
       inIframe = true;
     }
     setIsInIframe(inIframe);
+
+    // Retrieve previous session log ID if available
+    try {
+      const savedLogId = sessionStorage.getItem("fn_session_log_id");
+      if (savedLogId) {
+        setSessionLogId(savedLogId);
+      }
+    } catch (e) {
+      console.warn(e);
+    }
   }, []);
 
   // Track and increment visitor count
@@ -109,11 +127,36 @@ export default function LandingPage({
           const newCount = currentCount + 1;
           await setDoc(statsRef, { count: newCount });
           setGlobalGuestVisits(newCount);
+
+          // Log detailed visitor entry to the list
+          const logId = `log_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`;
+          const logRef = doc(db, "visitor_logs", logId);
+          
+          let savedName = "";
+          try {
+            savedName = localStorage.getItem("fn_visitor_name") || "";
+          } catch (e) {
+            console.warn(e);
+          }
+
+          await setDoc(logRef, {
+            timestamp: new Date().toISOString(),
+            userAgent: navigator.userAgent || "Unknown",
+            language: navigator.language || "Unknown",
+            platform: navigator.platform || "Unknown",
+            localVisits: localVisits,
+            path: window.location.pathname || "/",
+            referrer: document.referrer || "Direct",
+            name: savedName || ""
+          });
+
+          sessionStorage.setItem("fn_session_log_id", logId);
+          setSessionLogId(logId);
         } else {
           setGlobalGuestVisits(currentCount);
         }
       } catch (err) {
-        console.warn("Failed to increment global guest visit count:", err);
+        console.warn("Failed to increment global guest visit count or write visitor log:", err);
         // Fallback to random/incremental beautiful counter to maintain lovely UI
         setGlobalGuestVisits(230 + localVisits);
       }
@@ -141,6 +184,22 @@ export default function LandingPage({
       }
     };
   }, []);
+
+  const handleSaveVisitorName = async (name: string) => {
+    if (!name.trim()) return;
+    try {
+      localStorage.setItem("fn_visitor_name", name.trim());
+      setVisitorName(name.trim());
+      
+      const savedLogId = sessionLogId || sessionStorage.getItem("fn_session_log_id");
+      if (savedLogId) {
+        const logRef = doc(db, "visitor_logs", savedLogId);
+        await updateDoc(logRef, { name: name.trim() });
+      }
+    } catch (err) {
+      console.warn("Failed to update visitor log with name:", err);
+    }
+  };
   
   // Login Form States
   const [loginEmail, setLoginEmail] = useState("");

@@ -627,7 +627,6 @@ export default function Dashboard({ user, onSignOut, urlInviteCode }: DashboardP
             partnerEmail: "",
             partnerInviteCode: "",
           }).catch(err => console.error("Auto-cleanup Liam connection error:", err));
-          return;
         }
 
         const prof: any = {
@@ -755,26 +754,56 @@ export default function Dashboard({ user, onSignOut, urlInviteCode }: DashboardP
     return () => unsubPartner();
   }, [profile?.connectedPartnerId]);
 
-  // 1d. Background Auto-Sync for Relationship Anniversary Date
-  // Since security rules restrict direct writes to the partner's user document, we sync reactively.
-  // When a change in the partner's anniversaryDate is detected (or if we don't have one set but our partner does),
-  // we automatically update our own user profile to match so that both dashboards are perfectly synchronized.
+  // 1d. Background Auto-Sync for Relationship Anniversary Date, Partner Name, & Email
+  // Ensures both user documents always hold synchronized partner names, emails, and anniversary dates.
   useEffect(() => {
     if (!user?.uid || !profile || !partnerProfile) return;
     
     const myAnniversary = profile.anniversaryDate || "";
     const partnerAnniversary = partnerProfile.anniversaryDate || "";
-    
+    const pName = partnerProfile.name || "";
+    const pEmail = partnerProfile.email || "";
+
+    const updatesNeeded: any = {};
     if (partnerAnniversary && myAnniversary !== partnerAnniversary) {
-      console.log(`[AnniversarySync] Syncing anniversaryDate from partner: "${partnerAnniversary}" (ours was "${myAnniversary}")`);
+      updatesNeeded.anniversaryDate = partnerAnniversary;
+    }
+    if (pName && profile.partnerName !== pName) {
+      updatesNeeded.partnerName = pName;
+    }
+    if (pEmail && profile.partnerEmail !== pEmail) {
+      updatesNeeded.partnerEmail = pEmail;
+    }
+
+    if (Object.keys(updatesNeeded).length > 0) {
+      console.log(`[PartnerSync] Syncing partner details onto our user doc:`, updatesNeeded);
       const userRef = doc(db, "users", user.uid);
-      updateDoc(userRef, {
-        anniversaryDate: partnerAnniversary
-      }).catch(err => {
-        console.error("[AnniversarySync] Error updating our anniversaryDate:", err);
+      updateDoc(userRef, updatesNeeded).catch(err => {
+        console.error("[PartnerSync] Error updating our profile with partner details:", err);
       });
     }
-  }, [user?.uid, profile?.anniversaryDate, partnerProfile?.anniversaryDate]);
+  }, [user?.uid, profile?.anniversaryDate, profile?.partnerName, profile?.partnerEmail, partnerProfile]);
+
+  // 1e. Bidirectional Auto-Heal: Auto-connects users if another user's document points to us as their connectedPartnerId
+  useEffect(() => {
+    if (!user?.uid || !profile || profile.connectedPartnerId) return;
+
+    // Search if any user in Firestore has linked us as their partner
+    const qLinkedToMe = query(collection(db, "users"), where("connectedPartnerId", "==", user.uid));
+    getDocs(qLinkedToMe).then((snap) => {
+      if (!snap.empty) {
+        const partnerDoc = snap.docs[0];
+        const pData = partnerDoc.data();
+        console.log(`[AutoLinkSync] Found partner doc ${partnerDoc.id} (${pData.name}) pointing to us! Auto-healing our connectedPartnerId...`);
+        updateDoc(doc(db, "users", user.uid), {
+          connectedPartnerId: partnerDoc.id,
+          partnerName: pData.name || "My Partner",
+          partnerEmail: pData.email || "",
+          partnerInviteCode: pData.inviteCode || ""
+        }).catch(err => console.error("[AutoLinkSync] Failed to heal connectedPartnerId:", err));
+      }
+    }).catch(err => console.error("[AutoLinkSync] Query failed:", err));
+  }, [user?.uid, profile?.connectedPartnerId]);
 
   // Background Auto-Heal: Ensures that any gallery photos uploaded by the current user are immediately synced
   // with their partnerId as soon as a partner connection is detected, ensuring real-time cross-client reflecting.
@@ -2094,17 +2123,17 @@ export default function Dashboard({ user, onSignOut, urlInviteCode }: DashboardP
             {/* Logged in Profiles Info Badge - responsive & non-overlapping truncating wrapper */}
             <span 
               className={`text-[11px] font-black hidden md:inline-flex items-center gap-1.5 ${themeStyles.isDark ? 'bg-slate-800/80 border-slate-700/60 text-slate-300' : 'bg-slate-50 border border-slate-200 text-slate-500'} rounded-full px-3 py-1.5 max-w-[280px] lg:max-w-[360px] truncate cursor-help`}
-              title={profile?.partnerName ? `${profile?.name || user.displayName} & ${profile.partnerName} connected. Partner last active: ${formatFriendlyActiveStatus(partnerProfile?.lastVisitedAt)}` : `Waiting for partner...`}
+              title={(profile?.partnerName || partnerProfile?.name) ? `${profile?.name || user.displayName} & ${profile?.partnerName || partnerProfile?.name} connected. Partner last active: ${formatFriendlyActiveStatus(partnerProfile?.lastVisitedAt)}` : `Waiting for partner...`}
             >
               <Smile className={`w-4 h-4 ${themeStyles.textAccent} shrink-0`} />
               <span className="truncate max-w-[80px]" title={profile?.name || user.displayName}>
                 {profile?.name || user.displayName}
               </span>
-              {profile?.partnerName && (
+              {(profile?.partnerName || partnerProfile?.name) && (
                 <>
                   <span className="text-slate-300 font-normal">&amp;</span>
-                  <span className={`${themeStyles.textAccent} truncate max-w-[80px] font-bold`} title={profile.partnerName}>
-                    {profile.partnerName}
+                  <span className={`${themeStyles.textAccent} truncate max-w-[80px] font-bold`} title={profile?.partnerName || partnerProfile?.name}>
+                    {profile?.partnerName || partnerProfile?.name}
                   </span>
                   <span className="relative flex h-2 w-2 ml-0.5 shrink-0" title={`Partner Active: ${formatFriendlyActiveStatus(partnerProfile?.lastVisitedAt)}`}>
                     <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
@@ -2310,7 +2339,7 @@ export default function Dashboard({ user, onSignOut, urlInviteCode }: DashboardP
                 </span>
                 <span className="text-xs text-slate-600 font-bold">
                   {profile?.connectedPartnerId ? (
-                    <>Paired with partner <span className="font-extrabold text-pink-600 font-display">{profile?.partnerName || "Lover"}</span>. Connection secure.</>
+                    <>Paired with partner <span className="font-extrabold text-pink-600 font-display">{partnerProfile?.name || profile?.partnerName || "Lover"}</span>. Connection secure.</>
                   ) : (
                     <>Interactive features locked — Waiting to pair with partner.</>
                   )}
@@ -2352,7 +2381,7 @@ export default function Dashboard({ user, onSignOut, urlInviteCode }: DashboardP
                       </div>
                     </div>
                     <h2 className="font-display font-black text-lg text-slate-900 flex items-center gap-1.5">
-                      Connected to <span className="text-pink-600 underline decoration-pink-300 decoration-wavy decoration-2 underline-offset-4">{profile?.partnerName || "Your Partner"}</span> 💖
+                      Connected to <span className="text-pink-600 underline decoration-pink-300 decoration-wavy decoration-2 underline-offset-4">{partnerProfile?.name || profile?.partnerName || "Your Partner"}</span> 💖
                     </h2>
                     <p className="text-slate-550 text-xs leading-relaxed max-w-2xl font-medium">
                       Your dashboards are perfectly paired! Timeline scrapbook stories, secret love notes, countdowns, and wishlists will update instantly across both devices.

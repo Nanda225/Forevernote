@@ -98,7 +98,7 @@ async function generateContentWithRetry(prompt: string): Promise<string> {
 
 async function startServer() {
   const app = express();
-  const PORT = 3000;
+  const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 
   // Enable trust proxy for correct client IP detection behind Cloud Run reverse proxies
   app.enable("trust proxy");
@@ -130,9 +130,17 @@ async function startServer() {
     next();
   });
 
-  // 2. HTTPS enforcement in production
+  // 2. HTTPS enforcement in production (bypassing internal health probes)
   app.use((req, res, next) => {
-    if (process.env.NODE_ENV === "production" && req.headers["x-forwarded-proto"] !== "https") {
+    const hasProto = !!req.headers["x-forwarded-proto"];
+    const userAgent = req.headers["user-agent"] || "";
+    const isHealthCheck = 
+      !hasProto || 
+      req.path === "/api/health" || 
+      userAgent.toLowerCase().includes("health") ||
+      userAgent.toLowerCase().includes("google-gbhld");
+
+    if (process.env.NODE_ENV === "production" && req.headers["x-forwarded-proto"] !== "https" && !isHealthCheck) {
       return res.redirect(`https://${req.headers.host}${req.url}`);
     }
     next();

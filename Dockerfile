@@ -17,10 +17,10 @@ COPY --from=builder /app/dist ./dist
 
 # Set production environment variables
 ENV NODE_ENV=production
-ENV PORT=3000
+ENV PORT=8080
 
 # Expose the application port
-EXPOSE 3000
+EXPOSE 8080
 
 # Start the application using the compiled CommonJS server bundle
 CMD ["npm", "start"]

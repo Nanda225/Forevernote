@@ -120,7 +120,11 @@ getVirtualUser();
 
 // Robust proxy check to determine if virtual mode is active
 export function isVirtualMode() {
-  return isVirtualSessionActive || !auth.currentUser;
+  // If user is authenticated with Firebase Auth, ALWAYS use real Firestore
+  if (auth.currentUser) {
+    return false;
+  }
+  return isVirtualSessionActive;
 }
 
 // 1. DOC WRAPPER

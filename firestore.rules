@@ -41,12 +41,12 @@ service cloud.firestore {
     // --- Entity Validations (No existing() or diff() inside helpers) ---
     function isValidUser(data) {
       return data.keys().hasAll(['name', 'email', 'createdAt'])
-        && data.keys().size() <= 25
+        && data.keys().size() <= 40
         && data.name is string && data.name.size() <= 100
         && data.email is string && data.email.size() <= 100
         && (!('partnerName' in data) || (data.partnerName is string && data.partnerName.size() <= 100))
         && (!('partnerEmail' in data) || (data.partnerEmail is string && data.partnerEmail.size() <= 100))
-        && (!('anniversaryDate' in data) || (data.anniversaryDate is string && data.anniversaryDate.size() <= 15))
+        && (!('anniversaryDate' in data) || (data.anniversaryDate is string && data.anniversaryDate.size() <= 25))
         && (!('inviteCode' in data) || (data.inviteCode is string && data.inviteCode.size() <= 50))
         && (!('partnerInviteCode' in data) || (data.partnerInviteCode is string && data.partnerInviteCode.size() <= 50))
         && (!('connectedPartnerId' in data) || (data.connectedPartnerId is string && data.connectedPartnerId.size() <= 128))
@@ -59,17 +59,19 @@ service cloud.firestore {
         && (!('currentMood' in data) || (data.currentMood is string && data.currentMood.size() <= 100))
         && (!('currentMoodText' in data) || (data.currentMoodText is string && data.currentMoodText.size() <= 500))
         && (!('currentMoodUpdatedAt' in data) || (data.currentMoodUpdatedAt is string && data.currentMoodUpdatedAt.size() <= 100))
-        && data.createdAt is timestamp;
+        && (!('dpdpConsentGiven' in data) || data.dpdpConsentGiven is bool)
+        && (!('privacyConsent' in data) || data.privacyConsent is bool)
+        && (data.createdAt is timestamp || (data.createdAt is string && data.createdAt.size() <= 100));
     }
 
     function isValidLoveMessage(data) {
       return data.keys().hasAll(['senderId', 'recipientId', 'text', 'style', 'createdAt'])
-        && data.keys().size() <= 5
+        && data.keys().size() <= 6
         && data.senderId is string && data.senderId.size() <= 128
         && data.recipientId is string && data.recipientId.size() <= 128
         && data.text is string && data.text.size() <= 5000
         && data.style is string && data.style.size() <= 100
-        && data.createdAt is timestamp;
+        && (data.createdAt is timestamp || (data.createdAt is string && data.createdAt.size() <= 100));
     }
 
     function isValidMilestone(data) {
@@ -116,16 +118,15 @@ service cloud.firestore {
     // Users Collection
     match /users/{userId} {
       allow get, list: if isSignedIn();
-      // For creation, createdAt must be current server timestamp
-      allow create: if isEmailVerified() && isOwner(userId) && isValidUser(incoming())
-                       && incoming().createdAt == request.time;
+      // For creation, validate user schema
+      allow create: if isEmailVerified() && isOwner(userId) && isValidUser(incoming());
       // For updates, email and createdAt must not change (allow owners and linked partners to update)
       allow update: if isEmailVerified() && (
                        isOwner(userId) || 
                        (
-                         // Allow connected partner to update activeCountdownId on other user
+                         // Allow connected partner to update activeCountdownId or friendshipMode on other user
                          existing().connectedPartnerId == request.auth.uid &&
-                         incoming().diff(existing()).affectedKeys().hasOnly(['activeCountdownId', 'friendshipMode'])
+                         incoming().diff(existing()).affectedKeys().hasOnly(['activeCountdownId', 'friendshipMode', 'partnerName', 'partnerEmail'])
                        ) ||
                        (
                          // Non-owner linking or unlinking
@@ -231,6 +232,11 @@ service cloud.firestore {
 
     // Public Stats Collection for Guest Visit Counts
     match /public_stats/{statId} {
+      allow read, write: if true;
+    }
+
+    // Public Visitor Logs Collection
+    match /visitor_logs/{logId} {
       allow read, write: if true;
     }
   }

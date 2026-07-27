@@ -200,6 +200,46 @@
         }
       },
       "required": ["userId", "title", "caption", "imageUrl", "category", "date"]
+    },
+    "VisitorLog": {
+      "title": "Visitor Log",
+      "description": "A single visitor log entry detailing a page load event",
+      "type": "object",
+      "properties": {
+        "timestamp": {
+          "type": "string",
+          "description": "The ISO string when the visit occurred"
+        },
+        "userAgent": {
+          "type": "string",
+          "description": "The visitor's browser User Agent string"
+        },
+        "language": {
+          "type": "string",
+          "description": "The system language of the visitor"
+        },
+        "platform": {
+          "type": "string",
+          "description": "The system platform of the visitor"
+        },
+        "localVisits": {
+          "type": "integer",
+          "description": "The number of times this specific client browser has visited"
+        },
+        "path": {
+          "type": "string",
+          "description": "The page path visited"
+        },
+        "referrer": {
+          "type": "string",
+          "description": "The document referrer"
+        },
+        "name": {
+          "type": "string",
+          "description": "The optional name or nickname entered by the visitor"
+        }
+      },
+      "required": ["timestamp", "userAgent", "localVisits"]
     }
   },
   "firestore": {
@@ -222,6 +262,10 @@
     "gallery_items/{photoId}": {
       "schema": "GalleryItem",
       "description": "Stores shared collage keepsakes"
+    },
+    "visitor_logs/{logId}": {
+      "schema": "VisitorLog",
+      "description": "Collection of public visitor logs"
     }
   }
 }
