@@ -178,7 +178,7 @@ export default function ReusableStatsCounter({
   }, [registeredUsers, searchQuery]);
 
   return (
-    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
       {/* Primary Days Count (or Call to action) */}
       <motion.div
         initial={{ opacity: 0, y: 10 }}
@@ -294,50 +294,6 @@ export default function ReusableStatsCounter({
           <span>Email & In-App delivery scheduled</span>
         </p>
       </motion.div>
-
-      {/* Secure Platform Visitor Stats (Private Admin view) */}
-      {globalGuestVisits !== undefined && (
-        <motion.div
-          initial={{ opacity: 0, y: 10 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.3 }}
-          onClick={() => setIsModalOpen(true)}
-          className="bg-slate-900 text-white p-6 rounded-2xl shadow-xs border border-slate-800 flex flex-col justify-between min-h-[140px] relative overflow-hidden cursor-pointer hover:border-pink-500/50 hover:shadow-lg transition-all group"
-        >
-          {/* subtle background pattern */}
-          <div className="absolute top-[-20%] right-[-10%] opacity-10 pointer-events-none group-hover:scale-110 transition-transform duration-300">
-            <Users className="w-32 h-32 text-white" />
-          </div>
-
-          <div className="flex justify-between items-start z-10">
-            <div className="space-y-1">
-              <span className="text-[10px] uppercase font-bold tracking-wider text-slate-400 block flex items-center gap-1.5">
-                <span className="h-1.5 w-1.5 rounded-full bg-pink-500 animate-pulse" />
-                Private Lounge visits
-              </span>
-              <div className="flex items-baseline gap-1.5">
-                <span className="font-display font-extrabold text-4.5xl text-white">
-                  {globalGuestVisits}
-                </span>
-                <span className="text-xs text-slate-400 font-medium">global entries</span>
-              </div>
-            </div>
-            <div className="w-10 h-10 bg-slate-800 text-pink-400 rounded-xl flex items-center justify-center group-hover:bg-pink-500/10 group-hover:text-pink-300 transition-colors">
-              <Users className="w-5 h-5" />
-            </div>
-          </div>
-
-          <div className="flex justify-between items-center z-10 mt-3 border-t border-slate-800/80 pt-2">
-            <p className="text-xs text-slate-400 flex items-center gap-1">
-              <Sparkles className="w-3.5 h-3.5 text-pink-400" />
-              <span>Your visits: <strong className="text-pink-300">{myGuestVisits || 0}</strong></span>
-            </p>
-            <span className="text-[10px] text-pink-400 font-semibold uppercase tracking-wider group-hover:translate-x-1 transition-transform">
-              View List →
-            </span>
-          </div>
-        </motion.div>
-      )}
 
       {/* Visitor & Registered Users Logs List Modal */}
       <AnimatePresence>

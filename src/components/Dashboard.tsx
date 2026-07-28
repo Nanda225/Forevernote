@@ -5,7 +5,7 @@ import {
   Mail, Smile, AlertCircle, RefreshCw, X, MessageSquare, 
   FileText, Copy, UserCheck, Timer, Bell, BookOpen, Clock, 
   Send, HelpCircle, FileCheck, Camera, Mic, Play, Pause, Video, Info, Trash2, Upload,
-  Lock, Unlock, CheckCircle, Compass, Map
+  Lock, Unlock, CheckCircle, Compass, Map, Users, Search, User
 } from "lucide-react";
 import { db, auth, OperationType, handleFirestoreError, collection, doc, query, where, onSnapshot, setDoc, updateDoc, deleteDoc, serverTimestamp, getDocs, writeBatch } from "../firebase";
 import { UserProfile, Milestone, Reminder, MilestoneType, LetterStyle, ReminderType } from "../types";
@@ -4854,6 +4854,7 @@ export default function Dashboard({ user, onSignOut, urlInviteCode }: DashboardP
             </motion.div>
           )}
 
+
         </AnimatePresence>
       </main>
 
@@ -5719,6 +5720,7 @@ export default function Dashboard({ user, onSignOut, urlInviteCode }: DashboardP
           onSaveGeneratedLetter={handleSaveLetterText}
         />
       )}
+
 
 
     </div>
